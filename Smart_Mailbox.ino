@@ -5,6 +5,8 @@
 
 #include <WiFi.h>
 #include "esp_http_server.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // ===================
 // Select camera model
@@ -39,6 +41,7 @@
 BLECharacteristic *pCharacteristic = nullptr;
 bool deviceConnected = false;
 
+SemaphoreHandle_t rxMutex = nullptr;
 String rxload = "";
 String Router_SSID = "";
 String Router_Password = "";
@@ -69,16 +72,40 @@ void bleNotifyAndPrint(const String &msg) {
 }
 
 // ============================
-// Parse helper (robust: accepts "key=val" and "key =val" and "key= val" and "key = val")
+// Parse helper (accepts "key=val", "key =val", "key= val", "key = val";
+// values keep their interior spaces so SSIDs/passwords with spaces survive)
 // ============================
-String getValue(String data, String key) {
-  data.replace(" ", "");  // <-- critical for your "stream =on"
-  int idx = data.indexOf(key + "=");
-  if (idx == -1) return "";
-  int start = idx + key.length() + 1;
-  int end = data.indexOf(';', start);
-  if (end == -1) end = data.length();
-  return data.substring(start, end);
+String trimSpaces(const String &s) {
+  int start = 0, end = s.length();
+  while (start < end && s[start] == ' ') start++;
+  while (end > start && s[end - 1] == ' ') end--;
+  return s.substring(start, end);
+}
+
+String getValue(const String &data, const String &key) {
+  int searchFrom = 0;
+  while (true) {
+    int keyIdx = data.indexOf(key, searchFrom);
+    if (keyIdx == -1) return "";
+    searchFrom = keyIdx + 1;
+
+    // key must start at the beginning of a "key=val" token (start of
+    // string or right after a ';', ignoring spaces), not mid-value
+    int before = keyIdx - 1;
+    while (before >= 0 && data[before] == ' ') before--;
+    if (before >= 0 && data[before] != ';') continue;
+
+    int eq = keyIdx + key.length();
+    while (eq < (int)data.length() && data[eq] == ' ') eq++;
+    if (eq >= (int)data.length() || data[eq] != '=') continue;
+
+    int valStart = eq + 1;
+    while (valStart < (int)data.length() && data[valStart] == ' ') valStart++;
+    int valEnd = data.indexOf(';', valStart);
+    if (valEnd == -1) valEnd = data.length();
+
+    return trimSpaces(data.substring(valStart, valEnd));
+  }
 }
 
 // ============================
@@ -87,7 +114,9 @@ String getValue(String data, String key) {
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) override {
     deviceConnected = true;
+    xSemaphoreTake(rxMutex, portMAX_DELAY);
     rxload = "";
+    xSemaphoreGive(rxMutex);
     Serial.println("[DBG] BLE connected");
   }
 
@@ -104,9 +133,11 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
     String rxValue = pChar->getValue();
     if (rxValue.length() > 0) {
+      xSemaphoreTake(rxMutex, portMAX_DELAY);
       rxload = rxValue;
+      xSemaphoreGive(rxMutex);
       Serial.print("[BLE_RX] ");
-      Serial.println(rxload);
+      Serial.println(rxValue);
     }
   }
 };
@@ -115,6 +146,7 @@ void setupBLE(const String &BLEName) {
   const char *ble_name = BLEName.c_str();
 
   BLEDevice::init(ble_name);
+  BLEDevice::setMTU(185);  // allow room for stream_url/jpg_url notifications; still capped by what the central negotiates
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new MyServerCallbacks());
 
@@ -378,12 +410,12 @@ void startStreamingAndReport() {
     return;
   }
 
-  streamEnabled = true;
-
   if (!cameraReady && !initCameraOnce()) {
     bleNotifyAndPrint("err=camera_init");
     return;
   }
+
+  streamEnabled = true;
 
   if (!streamServerStarted) startCameraServer();
 
@@ -419,6 +451,8 @@ void setup() {
   Serial.println();
   Serial.println("[DBG] Boot");
 
+  rxMutex = xSemaphoreCreateMutex();
+
   setupBLE("Smart_Mailbox");
   Serial.println("[DBG] Bluetooth is ready!");
 }
@@ -429,10 +463,15 @@ void loop() {
   if (now - lastTick < 50) return;
   lastTick = now;
 
-  if (deviceConnected && rxload.length() > 0) {
-    String command = rxload;
+  String command;
+  if (deviceConnected) {
+    xSemaphoreTake(rxMutex, portMAX_DELAY);
+    command = rxload;
     rxload = "";
+    xSemaphoreGive(rxMutex);
+  }
 
+  if (deviceConnected && command.length() > 0) {
     Serial.print("[CMD] ");
     Serial.println(command);
 
