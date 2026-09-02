@@ -511,6 +511,8 @@ void processCommand(const String &command) {
       ledOn = false;
       digitalWrite(LED_BUILTIN, LOW);
       bleNotifyAndPrint("led=0");
+    } else if (LED_State == "status") {
+      bleNotifyAndPrint(ledOn ? "led=1" : "led=0");
     }
 
     // Relay
@@ -523,6 +525,8 @@ void processCommand(const String &command) {
       relayOn = false;
       digitalWrite(RELAY_BUILTIN, LOW);
       bleNotifyAndPrint("relay=0");
+    } else if (Relay_State == "status") {
+      bleNotifyAndPrint(relayOn ? "relay=1" : "relay=0");
     }
 
     // WiFi creds
