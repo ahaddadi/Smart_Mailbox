@@ -85,7 +85,9 @@ void bleNotifyAndPrint(const String &msg) {
 
 // ============================
 // Parse helper (accepts "key=val", "key =val", "key= val", "key = val";
-// values keep their interior spaces so SSIDs/passwords with spaces survive)
+// space acts as an extra command separator alongside ';', so
+// "led=on relay=on" and "led=on;relay=on" both work. Values therefore
+// can't contain spaces themselves.)
 // ============================
 String trimSpaces(const String &s) {
   int start = 0, end = s.length();
@@ -101,11 +103,10 @@ String getValue(const String &data, const String &key) {
     if (keyIdx == -1) return "";
     searchFrom = keyIdx + 1;
 
-    // key must start at the beginning of a "key=val" token (start of
-    // string or right after a ';', ignoring spaces), not mid-value
+    // key must start at the beginning of a "key=val" token: start of
+    // string, or right after a ';' or space delimiter
     int before = keyIdx - 1;
-    while (before >= 0 && data[before] == ' ') before--;
-    if (before >= 0 && data[before] != ';') continue;
+    if (before >= 0 && data[before] != ';' && data[before] != ' ') continue;
 
     int eq = keyIdx + key.length();
     while (eq < (int)data.length() && data[eq] == ' ') eq++;
@@ -113,8 +114,12 @@ String getValue(const String &data, const String &key) {
 
     int valStart = eq + 1;
     while (valStart < (int)data.length() && data[valStart] == ' ') valStart++;
-    int valEnd = data.indexOf(';', valStart);
-    if (valEnd == -1) valEnd = data.length();
+
+    int valEnd = data.length();
+    int semi = data.indexOf(';', valStart);
+    if (semi != -1 && semi < valEnd) valEnd = semi;
+    int spc = data.indexOf(' ', valStart);
+    if (spc != -1 && spc < valEnd) valEnd = spc;
 
     return trimSpaces(data.substring(valStart, valEnd));
   }
