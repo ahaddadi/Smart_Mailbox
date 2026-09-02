@@ -494,30 +494,10 @@ void setup() {
   }
 }
 
-void loop() {
-  static uint32_t lastTick = 0;
-  uint32_t now = millis();
-
-#if ENABLE_STATE_LOG
-  static uint32_t lastStateLog = 0;
-  if (now - lastStateLog >= STATE_LOG_INTERVAL_MS) {
-    lastStateLog = now;
-    logState();
-  }
-#endif
-
-  if (now - lastTick < 50) return;
-  lastTick = now;
-
-  String command;
-  if (deviceConnected) {
-    xSemaphoreTake(rxMutex, portMAX_DELAY);
-    command = rxload;
-    rxload = "";
-    xSemaphoreGive(rxMutex);
-  }
-
-  if (deviceConnected && command.length() > 0) {
+// ============================
+// Command dispatch (shared by BLE writes and Serial input)
+// ============================
+void processCommand(const String &command) {
     Serial.print("[CMD] ");
     Serial.println(command);
 
@@ -592,5 +572,49 @@ void loop() {
     } else if (Stream_State == "status") {
       bleNotifyAndPrint(streamEnabled ? "stream=1" : "stream=0");
     }
+}
+
+void loop() {
+  static uint32_t lastTick = 0;
+  uint32_t now = millis();
+
+#if ENABLE_STATE_LOG
+  static uint32_t lastStateLog = 0;
+  if (now - lastStateLog >= STATE_LOG_INTERVAL_MS) {
+    lastStateLog = now;
+    logState();
+  }
+#endif
+
+  // Serial commands: accumulate a line, dispatch on newline. Handles any
+  // Serial Monitor line-ending setting (CR, LF, or CRLF).
+  static String serialLine;
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (serialLine.length() > 0) {
+        processCommand(serialLine);
+        serialLine = "";
+      }
+    } else {
+      serialLine += c;
+      if (serialLine.length() > 200) serialLine = "";  // guard against runaway input
+    }
+  }
+
+  if (now - lastTick < 50) return;
+  lastTick = now;
+
+  // BLE commands
+  String bleCommand;
+  if (deviceConnected) {
+    xSemaphoreTake(rxMutex, portMAX_DELAY);
+    bleCommand = rxload;
+    rxload = "";
+    xSemaphoreGive(rxMutex);
+  }
+
+  if (bleCommand.length() > 0) {
+    processCommand(bleCommand);
   }
 }
