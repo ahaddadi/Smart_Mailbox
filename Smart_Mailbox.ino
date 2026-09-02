@@ -4,6 +4,7 @@
 #include "BLE2902.h"
 
 #include <WiFi.h>
+#include <Preferences.h>
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -46,6 +47,8 @@ String rxload = "";
 String Router_SSID = "";
 String Router_Password = "";
 bool wifiConnected = false;
+
+Preferences wifiPrefs;
 bool ledState = false;
 
 bool streamEnabled = false;
@@ -453,8 +456,18 @@ void setup() {
 
   rxMutex = xSemaphoreCreateMutex();
 
+  wifiPrefs.begin("wifi", false);
+  Router_SSID = wifiPrefs.getString("ssid", "");
+  Router_Password = wifiPrefs.getString("pass", "");
+
   setupBLE("Smart_Mailbox");
   Serial.println("[DBG] Bluetooth is ready!");
+
+  if (Router_SSID.length() > 0) {
+    Serial.print("[DBG] Auto-connecting with saved WiFi: ");
+    Serial.println(Router_SSID);
+    connectWiFi(Router_SSID, Router_Password);
+  }
 }
 
 void loop() {
@@ -499,7 +512,8 @@ void loop() {
     String s = getValue(command, "router_ssid");
     if (s.length()) {
       Router_SSID = s;
-      Serial.print("[DBG] router_ssid set: ");
+      wifiPrefs.putString("ssid", Router_SSID);
+      Serial.print("[DBG] router_ssid set (saved): ");
       Serial.println(Router_SSID);
       bleNotifyAndPrint("ok=router_ssid");
     }
@@ -507,7 +521,8 @@ void loop() {
     String p = getValue(command, "router_password");
     if (p.length()) {
       Router_Password = p;
-      Serial.println("[DBG] router_password set");
+      wifiPrefs.putString("pass", Router_Password);
+      Serial.println("[DBG] router_password set (saved)");
       bleNotifyAndPrint("ok=router_password");
     }
 
