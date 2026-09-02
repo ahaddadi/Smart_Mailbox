@@ -25,6 +25,13 @@
 #define RELAY_BUILTIN 41
 
 // ============================
+// Debug state logging
+// ============================
+// Set to 0 to silence the periodic state dump below.
+#define ENABLE_STATE_LOG 1
+#define STATE_LOG_INTERVAL_MS 5000
+
+// ============================
 // BLE UUIDs
 // ============================
 #define SERVICE_UUID "ab0828b1-198e-4351-b779-901fa0e0371e"
@@ -50,6 +57,8 @@ bool wifiConnected = false;
 
 Preferences wifiPrefs;
 bool ledState = false;
+bool ledOn = false;
+bool relayOn = false;
 
 bool streamEnabled = false;
 bool streamServerStarted = false;
@@ -441,6 +450,21 @@ void stopStreamingAndReport() {
 }
 
 // ============================
+// Debug state log
+// ============================
+#if ENABLE_STATE_LOG
+void logState() {
+  Serial.printf(
+    "[STATE] uptime=%lus heap=%u ble=%d led=%d relay=%d wifi=%d ssid=\"%s\" ip=%s stream=%d streamServer=%d camera=%d\n",
+    (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
+    deviceConnected, ledOn, relayOn,
+    wifiConnected, Router_SSID.c_str(),
+    wifiConnected ? WiFi.localIP().toString().c_str() : "-",
+    streamEnabled, streamServerStarted, cameraReady);
+}
+#endif
+
+// ============================
 // Arduino setup/loop
 // ============================
 void setup() {
@@ -473,6 +497,15 @@ void setup() {
 void loop() {
   static uint32_t lastTick = 0;
   uint32_t now = millis();
+
+#if ENABLE_STATE_LOG
+  static uint32_t lastStateLog = 0;
+  if (now - lastStateLog >= STATE_LOG_INTERVAL_MS) {
+    lastStateLog = now;
+    logState();
+  }
+#endif
+
   if (now - lastTick < 50) return;
   lastTick = now;
 
@@ -491,9 +524,11 @@ void loop() {
     // LED
     String LED_State = getValue(command, "led");
     if (LED_State == "on") {
+      ledOn = true;
       digitalWrite(LED_BUILTIN, HIGH);
       bleNotifyAndPrint("led=1");
     } else if (LED_State == "off") {
+      ledOn = false;
       digitalWrite(LED_BUILTIN, LOW);
       bleNotifyAndPrint("led=0");
     }
@@ -501,9 +536,11 @@ void loop() {
     // Relay
     String Relay_State = getValue(command, "relay");
     if (Relay_State == "on") {
+      relayOn = true;
       digitalWrite(RELAY_BUILTIN, HIGH);
       bleNotifyAndPrint("relay=1");
     } else if (Relay_State == "off") {
+      relayOn = false;
       digitalWrite(RELAY_BUILTIN, LOW);
       bleNotifyAndPrint("relay=0");
     }
