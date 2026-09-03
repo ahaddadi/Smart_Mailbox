@@ -46,6 +46,7 @@
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 // ===================
 // Select camera model
@@ -589,6 +590,15 @@ void startCameraServer() {
   config.server_port = 80;
   config.ctrl_port = 32768;
   config.max_uri_handlers = 4;
+  // Being on a separate server instance from /stream isn't enough by
+  // itself - both server tasks can still be scheduled onto the same CPU
+  // core and contend for it while a stream is actively pushing frames
+  // over WiFi. Pin the control server to core 1 (the same core the
+  // Arduino loop()/BLE stack run on) and give it a slightly higher
+  // priority than the stream server's default, so /cmd stays responsive
+  // even under streaming load.
+  config.core_id = 1;
+  config.task_priority = tskIDLE_PRIORITY + 6;
 
   if (httpd_start(&httpd, &config) == ESP_OK) {
     httpd_uri_t uri_jpg = { .uri = "/jpg", .method = HTTP_GET, .handler = jpg_handler, .user_ctx = NULL };
@@ -604,6 +614,10 @@ void startCameraServer() {
   stream_config.server_port = 81;
   stream_config.ctrl_port = 32769;  // must differ from the control server's ctrl_port above
   stream_config.max_uri_handlers = 2;
+  stream_config.core_id = 0;  // keep the heavy, continuous streaming loop off the control server's core
+  // task_priority left at its default (tskIDLE_PRIORITY+5) - intentionally
+  // lower than the control server's, above, so streaming yields to control
+  // commands when the two would otherwise compete for the same core.
 
   if (httpd_start(&streamHttpd, &stream_config) == ESP_OK) {
     httpd_uri_t uri_stream = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
