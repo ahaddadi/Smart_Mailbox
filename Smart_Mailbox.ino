@@ -570,6 +570,20 @@ void processCommand(const String &command) {
       bleNotifyAndPrint("wifi=0");
     } else if (Wifi_State == "status") {
       bleNotifyAndPrint(wifiConnected ? "wifi=1" : "wifi=0");
+    } else if (Wifi_State == "scan") {
+      Serial.println("[WIFI] scanning...");
+      if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
+      int n = WiFi.scanNetworks();
+      if (n < 0) {
+        bleNotifyAndPrint("err=wifi_scan_failed");
+      } else {
+        for (int i = 0; i < n; i++) {
+          bleNotifyAndPrint("wifi_scan=" + WiFi.SSID(i));
+          delay(20);  // give the BLE notify queue time to drain
+        }
+        bleNotifyAndPrint("wifi_scan_done=" + String(n));
+      }
+      WiFi.scanDelete();
     }
 
     // Stream control
