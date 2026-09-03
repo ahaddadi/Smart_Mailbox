@@ -24,13 +24,18 @@ from PIL import Image, ImageTk
 DEVICE_NAME = "Smart_Mailbox"
 MESSAGE_UUID = "4ac8a682-9736-4e5d-932b-e9b31405049c"
 
-BG = "#000000"
-FIELD_BG = "#1a1a1a"
-FG = "#e6e6e6"
-MUTED_FG = "#8a8a8a"
-ACCENT = "#2f7de1"
-ERROR_FG = "#ff6b6b"
-OK_FG = "#6bcf6b"
+# Three-tier elevation, like iOS/macOS dark mode: window is darkest,
+# card panels are a shade lighter, interactive fields lighter still.
+BG = "#1c1c1e"
+CARD_BG = "#2c2c2e"
+FIELD_BG = "#3a3a3c"
+FG = "#f2f2f7"
+MUTED_FG = "#98989d"
+BORDER = "#48484a"
+ACCENT = "#0a84ff"
+ERROR_FG = "#ff453a"
+OK_FG = "#30d158"
+FONT_TITLE = ("Segoe UI", 10, "bold")
 
 
 class BLEWorker:
@@ -170,99 +175,109 @@ class MailboxApp(tk.Tk):
         style = ttk.Style(self)
         style.theme_use("clam")  # the only built-in theme that honors custom colors on Windows
 
-        style.configure(".", background=BG, foreground=FG, fieldbackground=FIELD_BG)
+        style.configure(".", background=BG, foreground=FG, fieldbackground=FIELD_BG, font=("Segoe UI", 9))
         style.configure("TFrame", background=BG)
         style.configure("TLabel", background=BG, foreground=FG)
-        style.configure("TLabelframe", background=BG, foreground=FG, bordercolor=MUTED_FG)
-        style.configure("TLabelframe.Label", background=BG, foreground=FG)
-        style.configure("TButton", background=FIELD_BG, foreground=FG, bordercolor=MUTED_FG, focusthickness=0)
+        style.configure("TLabelframe", background=CARD_BG, foreground=FG, bordercolor=BORDER, borderwidth=1, relief="flat")
+        style.configure("TLabelframe.Label", background=CARD_BG, foreground=MUTED_FG, font=FONT_TITLE)
+
+        style.configure(
+            "TButton", background=FIELD_BG, foreground=FG, bordercolor=BORDER,
+            focusthickness=0, padding=(10, 6), relief="flat",
+        )
         style.map(
             "TButton",
             background=[("active", ACCENT), ("pressed", ACCENT)],
             foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
         )
-        style.configure("TEntry", fieldbackground=FIELD_BG, foreground=FG, insertcolor=FG, bordercolor=MUTED_FG)
+        style.configure("TEntry", fieldbackground=FIELD_BG, foreground=FG, insertcolor=FG, bordercolor=BORDER, padding=6)
+
+        # widgets that sit inside a card (LabelFrame) need the card's own
+        # background instead of the window's, or they'd show a mismatched box
+        style.configure("Card.TFrame", background=CARD_BG)
+        style.configure("Card.TLabel", background=CARD_BG, foreground=FG)
 
     def _build_ui(self):
         self.status_var = tk.StringVar(value="Disconnected")
-        ttk.Label(self, textvariable=self.status_var, foreground=MUTED_FG).pack(pady=(10, 4))
+        ttk.Label(self, textvariable=self.status_var, foreground=MUTED_FG).pack(pady=(14, 6))
 
         conn = ttk.Frame(self)
-        conn.pack(pady=2)
+        conn.pack(pady=(0, 6))
         ttk.Button(conn, text="Connect", command=self.ble.connect).pack(side="left", padx=4)
         ttk.Button(conn, text="Disconnect", command=self.ble.disconnect).pack(side="left", padx=4)
         ttk.Button(conn, text="Refresh Status", command=self._refresh_status).pack(side="left", padx=4)
 
-        controls = ttk.LabelFrame(self, text="Controls")
-        controls.pack(fill="x", padx=12, pady=8)
+        controls = ttk.LabelFrame(self, text="CONTROLS", padding=10)
+        controls.pack(fill="x", padx=14, pady=8)
         controls.columnconfigure(0, weight=1)
 
         self.led_var = tk.StringVar(value="LED: ?")
-        ttk.Label(controls, textvariable=self.led_var).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(controls, textvariable=self.led_var, style="Card.TLabel").grid(row=0, column=0, sticky="w", padx=4, pady=6)
         ttk.Button(controls, text="On", width=6, command=lambda: self.ble.send("led=on")).grid(row=0, column=1, padx=2)
         ttk.Button(controls, text="Off", width=6, command=lambda: self.ble.send("led=off")).grid(row=0, column=2, padx=2)
 
         self.relay_var = tk.StringVar(value="Relay: ?")
-        ttk.Label(controls, textvariable=self.relay_var).grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(controls, textvariable=self.relay_var, style="Card.TLabel").grid(row=1, column=0, sticky="w", padx=4, pady=6)
         ttk.Button(controls, text="On", width=6, command=lambda: self.ble.send("relay=on")).grid(row=1, column=1, padx=2)
         ttk.Button(controls, text="Off", width=6, command=lambda: self.ble.send("relay=off")).grid(row=1, column=2, padx=2)
 
-        wifi = ttk.LabelFrame(self, text="WiFi")
-        wifi.pack(fill="x", padx=12, pady=8)
+        wifi = ttk.LabelFrame(self, text="WIFI", padding=10)
+        wifi.pack(fill="x", padx=14, pady=8)
         wifi.columnconfigure(1, weight=1)
 
-        scan_row = ttk.Frame(wifi)
-        scan_row.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=(4, 0))
+        scan_row = ttk.Frame(wifi, style="Card.TFrame")
+        scan_row.grid(row=0, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 6))
         ttk.Button(scan_row, text="Scan Networks", command=self._wifi_scan).pack(side="left")
         self.scan_status_var = tk.StringVar(value="")
-        ttk.Label(scan_row, textvariable=self.scan_status_var, foreground=MUTED_FG).pack(side="left", padx=8)
+        ttk.Label(scan_row, textvariable=self.scan_status_var, style="Card.TLabel", foreground=MUTED_FG).pack(side="left", padx=8)
 
         self.network_list = tk.Listbox(
             wifi, height=5, bg=FIELD_BG, fg=FG, selectbackground=ACCENT, selectforeground="#ffffff",
-            highlightthickness=1, highlightbackground=MUTED_FG, highlightcolor=ACCENT, borderwidth=0,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT, borderwidth=0,
+            relief="flat", activestyle="none",
         )
-        self.network_list.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=4)
+        self.network_list.grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=6)
         self.network_list.bind("<<ListboxSelect>>", self._on_network_selected)
         self._known_networks = []  # in-order, de-duplicated SSIDs from the last scan
 
-        ttk.Label(wifi, text="Network Name").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(wifi, text="Network Name", style="Card.TLabel").grid(row=2, column=0, sticky="w", padx=4, pady=6)
         self.ssid_entry = ttk.Entry(wifi)
-        self.ssid_entry.grid(row=2, column=1, sticky="ew", padx=6, pady=4)
+        self.ssid_entry.grid(row=2, column=1, sticky="ew", padx=4, pady=6)
 
-        ttk.Label(wifi, text="Password").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(wifi, text="Password", style="Card.TLabel").grid(row=3, column=0, sticky="w", padx=4, pady=6)
         self.pass_entry = ttk.Entry(wifi, show="*")
-        self.pass_entry.grid(row=3, column=1, sticky="ew", padx=6, pady=4)
+        self.pass_entry.grid(row=3, column=1, sticky="ew", padx=4, pady=6)
 
-        wifi_btns = ttk.Frame(wifi)
-        wifi_btns.grid(row=4, column=0, columnspan=2, pady=6)
+        wifi_btns = ttk.Frame(wifi, style="Card.TFrame")
+        wifi_btns.grid(row=4, column=0, columnspan=2, pady=8)
         ttk.Button(wifi_btns, text="Connect", command=self._wifi_connect).pack(side="left", padx=4)
         ttk.Button(wifi_btns, text="Disconnect", command=self._wifi_disconnect).pack(side="left", padx=4)
 
         self.wifi_var = tk.StringVar(value="WiFi: ?")
-        ttk.Label(wifi, textvariable=self.wifi_var).grid(row=5, column=0, columnspan=2, pady=(0, 4))
+        ttk.Label(wifi, textvariable=self.wifi_var, style="Card.TLabel").grid(row=5, column=0, columnspan=2, pady=(0, 4))
 
-        stream = ttk.LabelFrame(self, text="Camera")
-        stream.pack(fill="both", expand=True, padx=12, pady=8)
+        stream = ttk.LabelFrame(self, text="CAMERA", padding=10)
+        stream.pack(fill="both", expand=True, padx=14, pady=8)
 
-        btns = ttk.Frame(stream)
+        btns = ttk.Frame(stream, style="Card.TFrame")
         btns.pack(pady=4)
         ttk.Button(btns, text="Stream On", command=lambda: self.ble.send("stream=on")).pack(side="left", padx=4)
         ttk.Button(btns, text="Stream Off", command=self._stream_off).pack(side="left", padx=4)
 
-        rec_row = ttk.Frame(stream)
-        rec_row.pack(pady=(0, 4))
+        rec_row = ttk.Frame(stream, style="Card.TFrame")
+        rec_row.pack(pady=(0, 6))
         self.record_btn_var = tk.StringVar(value="Start Recording")
         ttk.Button(rec_row, textvariable=self.record_btn_var, command=self._toggle_recording).pack(side="left", padx=4)
         self.recording_status_var = tk.StringVar(value="")
-        ttk.Label(rec_row, textvariable=self.recording_status_var, foreground=ERROR_FG).pack(side="left", padx=8)
+        ttk.Label(rec_row, textvariable=self.recording_status_var, style="Card.TLabel", foreground=ERROR_FG).pack(side="left", padx=8)
 
         self.video_label = ttk.Label(stream, text="(no stream)", anchor="center", background=FIELD_BG, foreground=MUTED_FG)
-        self.video_label.pack(fill="both", expand=True, padx=6, pady=6)
+        self.video_label.pack(fill="both", expand=True, padx=2, pady=(2, 0))
 
-        log_frame = ttk.LabelFrame(self, text="Log")
-        log_frame.pack(fill="both", padx=12, pady=(0, 10))
+        log_frame = ttk.LabelFrame(self, text="LOG", padding=8)
+        log_frame.pack(fill="both", padx=14, pady=(0, 12))
         self.log_text = tk.Text(
-            log_frame, height=6, state="disabled", wrap="word",
+            log_frame, height=6, state="disabled", wrap="word", font=("Consolas", 9),
             bg=FIELD_BG, fg=FG, insertbackground=FG, borderwidth=0, highlightthickness=0,
         )
         self.log_text.tag_configure("error", foreground=ERROR_FG)
