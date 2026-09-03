@@ -22,6 +22,14 @@ from PIL import Image, ImageTk
 DEVICE_NAME = "Smart_Mailbox"
 MESSAGE_UUID = "4ac8a682-9736-4e5d-932b-e9b31405049c"
 
+BG = "#000000"
+FIELD_BG = "#1a1a1a"
+FG = "#e6e6e6"
+MUTED_FG = "#8a8a8a"
+ACCENT = "#2f7de1"
+ERROR_FG = "#ff6b6b"
+OK_FG = "#6bcf6b"
+
 
 class BLEWorker:
     """Runs an asyncio loop on a background thread; the GUI talks to it
@@ -146,13 +154,32 @@ class MailboxApp(tk.Tk):
         self.ble = BLEWorker(self.event_q)
         self.stream_reader: Optional[MJPEGReader] = None
 
+        self._apply_dark_theme()
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(50, self._poll_events)
 
+    def _apply_dark_theme(self):
+        self.configure(background=BG)
+        style = ttk.Style(self)
+        style.theme_use("clam")  # the only built-in theme that honors custom colors on Windows
+
+        style.configure(".", background=BG, foreground=FG, fieldbackground=FIELD_BG)
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=FG)
+        style.configure("TLabelframe", background=BG, foreground=FG, bordercolor=MUTED_FG)
+        style.configure("TLabelframe.Label", background=BG, foreground=FG)
+        style.configure("TButton", background=FIELD_BG, foreground=FG, bordercolor=MUTED_FG, focusthickness=0)
+        style.map(
+            "TButton",
+            background=[("active", ACCENT), ("pressed", ACCENT)],
+            foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        )
+        style.configure("TEntry", fieldbackground=FIELD_BG, foreground=FG, insertcolor=FG, bordercolor=MUTED_FG)
+
     def _build_ui(self):
         self.status_var = tk.StringVar(value="Disconnected")
-        ttk.Label(self, textvariable=self.status_var, foreground="#555").pack(pady=(10, 4))
+        ttk.Label(self, textvariable=self.status_var, foreground=MUTED_FG).pack(pady=(10, 4))
 
         conn = ttk.Frame(self)
         conn.pack(pady=2)
@@ -182,9 +209,12 @@ class MailboxApp(tk.Tk):
         scan_row.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=(4, 0))
         ttk.Button(scan_row, text="Scan Networks", command=self._wifi_scan).pack(side="left")
         self.scan_status_var = tk.StringVar(value="")
-        ttk.Label(scan_row, textvariable=self.scan_status_var, foreground="#777").pack(side="left", padx=8)
+        ttk.Label(scan_row, textvariable=self.scan_status_var, foreground=MUTED_FG).pack(side="left", padx=8)
 
-        self.network_list = tk.Listbox(wifi, height=5)
+        self.network_list = tk.Listbox(
+            wifi, height=5, bg=FIELD_BG, fg=FG, selectbackground=ACCENT, selectforeground="#ffffff",
+            highlightthickness=1, highlightbackground=MUTED_FG, highlightcolor=ACCENT, borderwidth=0,
+        )
         self.network_list.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=4)
         self.network_list.bind("<<ListboxSelect>>", self._on_network_selected)
         self._known_networks = []  # in-order, de-duplicated SSIDs from the last scan
@@ -209,12 +239,17 @@ class MailboxApp(tk.Tk):
         ttk.Button(btns, text="Stream On", command=lambda: self.ble.send("stream=on")).pack(side="left", padx=4)
         ttk.Button(btns, text="Stream Off", command=self._stream_off).pack(side="left", padx=4)
 
-        self.video_label = ttk.Label(stream, text="(no stream)", anchor="center", background="#222", foreground="#aaa")
+        self.video_label = ttk.Label(stream, text="(no stream)", anchor="center", background=FIELD_BG, foreground=MUTED_FG)
         self.video_label.pack(fill="both", expand=True, padx=6, pady=6)
 
         log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", padx=12, pady=(0, 10))
-        self.log_text = tk.Text(log_frame, height=6, state="disabled", wrap="word")
+        self.log_text = tk.Text(
+            log_frame, height=6, state="disabled", wrap="word",
+            bg=FIELD_BG, fg=FG, insertbackground=FG, borderwidth=0, highlightthickness=0,
+        )
+        self.log_text.tag_configure("error", foreground=ERROR_FG)
+        self.log_text.tag_configure("ok", foreground=OK_FG)
         self.log_text.pack(fill="both", expand=True)
 
     # --- actions ---
@@ -256,7 +291,8 @@ class MailboxApp(tk.Tk):
                 kind, payload = self.event_q.get_nowait()
                 if kind == "status":
                     self.status_var.set(payload)
-                    self._log(f"[STATUS] {payload}")
+                    failed = "failed" in payload.lower() or "not found" in payload.lower()
+                    self._log(f"[STATUS] {payload}", tag="error" if failed else None)
                 elif kind == "connected":
                     self._refresh_status()
                 elif kind == "notify":
@@ -268,7 +304,7 @@ class MailboxApp(tk.Tk):
         self.after(50, self._poll_events)
 
     def _handle_notify(self, text: str):
-        self._log(f"[NOTIFY] {text}")
+        self._log(self._readable_notify(text), tag=self._tag_for(text))
         if text.startswith("wifi_scan_done="):
             self.scan_status_var.set(f"Found {text.split('=', 1)[1]} network(s)")
         elif text.startswith("wifi_scan="):
@@ -288,6 +324,45 @@ class MailboxApp(tk.Tk):
             self._start_stream_reader(text.split("=", 1)[1])
         elif text == "stream=0":
             self._stop_stream_reader()
+
+    NOTIFY_TEXT = {
+        "led=1": "LED turned ON",
+        "led=0": "LED turned OFF",
+        "relay=1": "Relay turned ON",
+        "relay=0": "Relay turned OFF",
+        "wifi=1": "WiFi connected",
+        "wifi=0": "WiFi disconnected",
+        "stream=1": "Streaming started",
+        "stream=0": "Streaming stopped",
+        "ok=router_ssid": "WiFi SSID saved",
+        "ok=router_password": "WiFi password saved",
+        "err=wifi_off": "Error: WiFi is not connected",
+        "err=camera_init": "Error: camera failed to initialize",
+        "err=no_ssid": "Error: no SSID set",
+        "err=wifi_scan_failed": "Error: WiFi scan failed",
+    }
+
+    def _readable_notify(self, text: str) -> str:
+        if text in self.NOTIFY_TEXT:
+            return self.NOTIFY_TEXT[text]
+        if text.startswith("stream_url="):
+            return "Stream URL: " + text.split("=", 1)[1]
+        if text.startswith("jpg_url="):
+            return "Snapshot URL: " + text.split("=", 1)[1]
+        if text.startswith("wifi_scan_done="):
+            return f"WiFi scan complete: {text.split('=', 1)[1]} network(s) found"
+        if text.startswith("wifi_scan="):
+            return "Found network: " + text.split("=", 1)[1]
+        return text
+
+    OK_NOTIFIES = {"led=1", "relay=1", "wifi=1", "stream=1", "ok=router_ssid", "ok=router_password"}
+
+    def _tag_for(self, raw_text: str) -> Optional[str]:
+        if raw_text.startswith("err="):
+            return "error"
+        if raw_text in self.OK_NOTIFIES or raw_text.startswith("wifi_scan="):
+            return "ok"
+        return None
 
     def _start_stream_reader(self, url: str):
         self._stop_stream_reader()
@@ -310,11 +385,14 @@ class MailboxApp(tk.Tk):
             self.video_label.configure(image=photo, text="")
             self.video_label.image = photo  # keep a reference alive
         except Exception as e:
-            self._log(f"[VIDEO] frame decode error: {e}")
+            self._log(f"[VIDEO] frame decode error: {e}", tag="error")
 
-    def _log(self, text: str):
+    def _log(self, text: str, tag: Optional[str] = None):
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", text + "\n")
+        if tag:
+            self.log_text.insert("end", text + "\n", tag)
+        else:
+            self.log_text.insert("end", text + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
