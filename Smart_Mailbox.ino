@@ -602,6 +602,13 @@ void processCommand(const String &command) {
       stopStreamingAndReport();
     } else if (Stream_State == "status") {
       bleNotifyAndPrint(streamEnabled ? "stream=1" : "stream=0");
+      if (streamEnabled && wifiConnected) {
+        // re-send the URLs too, so a client that just (re)connected while
+        // streaming was already running can resume showing video
+        String ip = WiFi.localIP().toString();
+        bleNotifyAndPrint("stream_url=http://" + ip + "/stream");
+        bleNotifyAndPrint("jpg_url=http://" + ip + "/jpg");
+      }
     }
 }
 
