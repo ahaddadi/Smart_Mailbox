@@ -154,8 +154,8 @@ class MailboxApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Smart Mailbox")
-        self.geometry("420x760")
-        self.minsize(380, 640)
+        self.geometry("460x920")
+        self.minsize(420, 820)
 
         self.event_q = queue.Queue()
         self.ble = BLEWorker(self.event_q)
@@ -456,7 +456,7 @@ class MailboxApp(tk.Tk):
                 self._write_video_frame(img)
 
             display_img = img.copy()
-            display_img.thumbnail((380, 380))
+            display_img.thumbnail((420, 420))
             photo = ImageTk.PhotoImage(display_img)
             self.video_label.configure(image=photo, text="")
             self.video_label.image = photo  # keep a reference alive
