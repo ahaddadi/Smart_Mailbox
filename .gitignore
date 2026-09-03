@@ -3,3 +3,5 @@ build/
 *.elf
 *.hex
 .vscode/
+tools/mailbox_gui_config.json
+*.avi

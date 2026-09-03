@@ -1,3 +1,41 @@
+// ============================================================================
+// Smart_Mailbox.ino
+// ----------------------------------------------------------------------------
+// Firmware for an ESP32-S3 based "smart mailbox": a BLE-controlled box with
+// an LED, a relay (driving the mailbox lock/latch), WiFi provisioning, and a
+// camera that can stream live video over HTTP once WiFi is up.
+//
+// Control protocol
+// -----------------
+// The board is controlled by sending short text commands of the form
+// "key=value" (multiple can be chained with ';' or a space, e.g.
+// "led=on;relay=off" or "led=on relay=off"). Commands can arrive three
+// ways, all funneled into the same processCommand() dispatcher:
+//   1. BLE: write the command string to the MESSAGE_UUID characteristic.
+//      Replies/events come back as BLE notifications on that same
+//      characteristic (see bleNotifyAndPrint()). This is also the only
+//      path that works before the board has joined a WiFi network, so
+//      initial provisioning (router_ssid/router_password/wifi=on) has to
+//      happen here.
+//   2. Serial (USB): type a command into the Serial Monitor and press
+//      Enter. Useful for testing without a phone/BLE client.
+//   3. HTTP, once WiFi is up: GET /cmd?c=<url-encoded command> runs the
+//      same command and replies with the same text a BLE notify would
+//      have carried (see cmd_handler()). A client learns the board's IP
+//      from the "ip=..." BLE notification sent on a successful wifi=on
+//      or wifi=status, and can then drive led=/relay=/stream=/etc.
+//      entirely over WiFi without staying connected over BLE.
+//
+// Supported keys: led, relay, router_ssid, router_password, wifi, stream.
+// See processCommand() for the full set of accepted values per key and the
+// notifications each one produces.
+//
+// WiFi credentials (router_ssid/router_password) and the "should we be
+// connected" intent are persisted to flash (NVS, via the Preferences
+// library) so the board can reconnect automatically after a reboot or power
+// loss - see the wifiWanted flag and its use in setup()/processCommand().
+// ============================================================================
+
 #include "BLEDevice.h"
 #include "BLEServer.h"
 #include "BLEUtils.h"
@@ -21,8 +59,8 @@
 // ============================
 // GPIO
 // ============================
-#define LED_BUILTIN 2
-#define RELAY_BUILTIN 41
+#define LED_BUILTIN 2     // status/command LED
+#define RELAY_BUILTIN 41  // drives the mailbox lock/latch relay
 
 // ============================
 // Debug state logging
@@ -34,9 +72,14 @@
 // ============================
 // BLE UUIDs
 // ============================
+// SERVICE_UUID / MESSAGE_UUID identify the custom "command + notify"
+// characteristic that carries the whole control protocol described above.
 #define SERVICE_UUID "ab0828b1-198e-4351-b779-901fa0e0371e"
 #define MESSAGE_UUID "4ac8a682-9736-4e5d-932b-e9b31405049c"
 
+// Standard BLE Device Information service/characteristic UUIDs, exposed
+// read-only so a BLE client can identify the board (manufacturer, name,
+// and a serial derived from the chip's own MAC/efuse ID).
 #define DEVINFO_UUID (uint16_t)0x180a
 #define DEVINFO_MANUFACTURER_UUID (uint16_t)0x2a29
 #define DEVINFO_NAME_UUID (uint16_t)0x2a24
@@ -46,28 +89,48 @@
 // ============================
 // Globals
 // ============================
-BLECharacteristic *pCharacteristic = nullptr;
-bool deviceConnected = false;
+BLECharacteristic *pCharacteristic = nullptr;  // the command/notify characteristic, set up in setupBLE()
+bool deviceConnected = false;                  // true while a BLE central (phone/app) is connected
 
+// rxload is the raw command string most recently written by a BLE client.
+// It's written from the BLE stack's own task (inside MyCallbacks::onWrite)
+// and read/cleared from loop() (the main Arduino task) - two different
+// FreeRTOS tasks touching the same Arduino String, so every access to
+// rxload must be wrapped in rxMutex to avoid racing on its heap buffer.
 SemaphoreHandle_t rxMutex = nullptr;
 String rxload = "";
+
+// WiFi credentials, persisted to flash (see wifiPrefs) so the board can
+// reconnect automatically after a reboot without needing to be
+// reprovisioned over BLE every time.
 String Router_SSID = "";
 String Router_Password = "";
-bool wifiConnected = false;
-bool wifiWanted = false;  // persisted: should we auto-connect on boot?
+bool wifiConnected = false;      // true once connectWiFi() has actually succeeded
+bool wifiWanted = false;         // persisted: should we auto-connect on boot?
 
-Preferences wifiPrefs;
-bool ledState = false;
-bool ledOn = false;
-bool relayOn = false;
+Preferences wifiPrefs;  // NVS namespace "wifi": stores ssid, pass, and the wanted flag
 
-bool streamEnabled = false;
-bool streamServerStarted = false;
-bool cameraReady = false;
+bool ledState = false;  // used only to alternate the LED while connectWiFi() is blocking/retrying
+bool ledOn = false;      // last commanded LED state (led=on/off), used for led=status and the debug log
+bool relayOn = false;    // last commanded relay state (relay=on/off), used for relay=status and the debug log
 
-httpd_handle_t httpd = NULL;
+bool streamEnabled = false;       // true once stream=on has succeeded; gates the HTTP handlers
+bool streamServerStarted = false; // true once the HTTP server (httpd) has been started (only done once)
+bool cameraReady = false;         // true once the camera driver has been initialized (only done once)
 
-// Stream constants
+httpd_handle_t httpd = NULL;  // handle for the ESP-IDF HTTP server serving /jpg, /stream, and /cmd
+
+// When true, every reply that would normally only go to BLE/Serial is also
+// appended to httpReplyBuffer instead of being sent to those. Set around a
+// processCommand() call triggered by an HTTP /cmd request (see
+// cmd_handler()) so that request's HTTP response can echo back exactly
+// what a BLE client would have received - see bleNotifyAndPrint().
+bool captureForHttp = false;
+String httpReplyBuffer = "";
+
+// Stream constants: the exact byte sequences the MJPEG multipart HTTP
+// response is built from. Each frame is sent as:
+//   STREAM_BOUNDARY + (STREAM_PART with the real length) + <JPEG bytes>
 static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
 static const char *STREAM_BOUNDARY = "\r\n--frame\r\n";
 static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
@@ -75,12 +138,26 @@ static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u
 // ============================
 // Helpers: notify + serial debug
 // ============================
+// Sends `msg` back to whichever BLE client is subscribed (as a
+// characteristic notify) and always echoes it to the Serial console too,
+// so the same function works as the single "reply" mechanism regardless of
+// whether the triggering command came in over BLE or Serial. When a
+// command is being dispatched on behalf of an HTTP /cmd request instead
+// (captureForHttp == true), the message is also collected into
+// httpReplyBuffer so cmd_handler() can send it back as that request's HTTP
+// response body - this is what lets led=/relay=/stream= (and everything
+// else processCommand() understands) be driven over plain HTTP, reusing
+// the exact same command parsing and reply text as BLE/Serial.
 void bleNotifyAndPrint(const String &msg) {
   Serial.print("[BLE_NOTIFY] ");
   Serial.println(msg);
   if (pCharacteristic) {
     pCharacteristic->setValue(msg.c_str());
     pCharacteristic->notify();
+  }
+  if (captureForHttp) {
+    httpReplyBuffer += msg;
+    httpReplyBuffer += "\n";
   }
 }
 
@@ -90,6 +167,9 @@ void bleNotifyAndPrint(const String &msg) {
 // "led=on relay=on" and "led=on;relay=on" both work. Values therefore
 // can't contain spaces themselves.)
 // ============================
+
+// Strips leading/trailing spaces from a String (Arduino's String class has
+// no built-in trim() that returns a copy, so this is a small local helper).
 String trimSpaces(const String &s) {
   int start = 0, end = s.length();
   while (start < end && s[start] == ' ') start++;
@@ -97,22 +177,35 @@ String trimSpaces(const String &s) {
   return s.substring(start, end);
 }
 
+// Extracts the value for `key` out of a "key1=val1;key2=val2 key3=val3"
+// style command string, or "" if the key isn't present. Handles optional
+// whitespace around '=' and treats both ';' and ' ' as separators between
+// key=value pairs. Also verifies the key match is a real token boundary
+// (start of string, or right after a ';'/' ') so a key can't accidentally
+// match as a substring inside a longer key or value (e.g. searching for
+// "ssid" wouldn't wrongly match inside "router_ssid").
 String getValue(const String &data, const String &key) {
   int searchFrom = 0;
   while (true) {
     int keyIdx = data.indexOf(key, searchFrom);
-    if (keyIdx == -1) return "";
-    searchFrom = keyIdx + 1;
+    if (keyIdx == -1) return "";  // key not present anywhere in the string
+    searchFrom = keyIdx + 1;      // if this occurrence turns out invalid, keep scanning past it
 
     // key must start at the beginning of a "key=val" token: start of
     // string, or right after a ';' or space delimiter
     int before = keyIdx - 1;
     if (before >= 0 && data[before] != ';' && data[before] != ' ') continue;
 
+    // Skip optional spaces between the key name and its '=' (handles
+    // "key = val" as well as "key=val"). If there's no '=' where expected,
+    // this wasn't a real match (e.g. key was a substring of a longer
+    // identifier) - keep scanning.
     int eq = keyIdx + key.length();
     while (eq < (int)data.length() && data[eq] == ' ') eq++;
     if (eq >= (int)data.length() || data[eq] != '=') continue;
 
+    // Skip optional spaces right after '=', then the value runs until the
+    // next ';' or ' ' (or end of string), whichever comes first.
     int valStart = eq + 1;
     while (valStart < (int)data.length() && data[valStart] == ' ') valStart++;
 
@@ -126,18 +219,51 @@ String getValue(const String &data, const String &key) {
   }
 }
 
+// Decodes a application/x-www-form-urlencoded string (the format used for
+// HTTP query-string values): '+' becomes a space, and "%XX" becomes the
+// byte 0xXX. Used to recover the original command text from the "c" query
+// parameter of an HTTP GET /cmd?c=... request (see cmd_handler()), since
+// that command text itself uses '=', ';', and spaces which must be
+// percent-encoded by the client to survive as a single query value.
+String urlDecode(const String &s) {
+  String out;
+  out.reserve(s.length());
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s[i];
+    if (c == '+') {
+      out += ' ';
+    } else if (c == '%' && i + 2 < (int)s.length()) {
+      char hex[3] = { s[i + 1], s[i + 2], 0 };
+      out += (char)strtol(hex, nullptr, 16);
+      i += 2;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
 // ============================
 // BLE callbacks
 // ============================
+// Runs on the BLE/NimBLE stack's own FreeRTOS task, not the main loop()
+// task - keep these handlers quick and be careful about shared state
+// (see the rxMutex comment above rxload).
 class MyServerCallbacks : public BLEServerCallbacks {
+  // Called when a central (phone/app) completes a BLE connection.
   void onConnect(BLEServer *pServer) override {
     deviceConnected = true;
+    // Clear out any stale command left over from a previous session so a
+    // fresh connection doesn't accidentally replay an old write.
     xSemaphoreTake(rxMutex, portMAX_DELAY);
     rxload = "";
     xSemaphoreGive(rxMutex);
     Serial.println("[DBG] BLE connected");
   }
 
+  // Called when the central disconnects. Immediately restarts advertising
+  // so a new client (or the same one reconnecting) can find the board
+  // again without needing a physical reset.
   void onDisconnect(BLEServer *pServer) override {
     deviceConnected = false;
     Serial.println("[DBG] BLE disconnected");
@@ -148,6 +274,10 @@ class MyServerCallbacks : public BLEServerCallbacks {
 };
 
 class MyCallbacks : public BLECharacteristicCallbacks {
+  // Called whenever a BLE client writes to the command characteristic.
+  // Just stashes the raw command string into rxload (mutex-protected);
+  // the actual parsing/dispatch happens later on the main loop() task via
+  // processCommand(), keeping this callback itself fast.
   void onWrite(BLECharacteristic *pChar) override {
     String rxValue = pChar->getValue();
     if (rxValue.length() > 0) {
@@ -160,6 +290,9 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+// Brings up the whole BLE GATT server: the custom command/notify
+// characteristic, the standard Device Info service, and advertising.
+// Called once from setup().
 void setupBLE(const String &BLEName) {
   const char *ble_name = BLEName.c_str();
 
@@ -168,16 +301,19 @@ void setupBLE(const String &BLEName) {
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new MyServerCallbacks());
 
+  // Custom command service: one characteristic used for both writing
+  // commands (from the client) and receiving notifications (replies/events
+  // sent back by the board).
   BLEService *service = server->createService(SERVICE_UUID);
   pCharacteristic = service->createCharacteristic(
     MESSAGE_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_WRITE);
 
   pCharacteristic->setCallbacks(new MyCallbacks());
-  pCharacteristic->addDescriptor(new BLE2902());
+  pCharacteristic->addDescriptor(new BLE2902());  // required for the client to be able to enable notifications
   service->start();
 
-  // Device Info
+  // Device Info service: standard, read-only identification fields.
   service = server->createService(DEVINFO_UUID);
 
   BLECharacteristic *c = service->createCharacteristic(DEVINFO_MANUFACTURER_UUID, BLECharacteristic::PROPERTY_READ);
@@ -192,7 +328,9 @@ void setupBLE(const String &BLEName) {
 
   service->start();
 
-  // Advertising
+  // Advertising: broadcast the board's name and the custom service UUID so
+  // a scanning client (phone app, nRF Connect, our own ble_console.py/
+  // mailbox_gui.py) can find and identify it.
   BLEAdvertising *adv = server->getAdvertising();
   BLEAdvertisementData advData;
   advData.setName(ble_name);
@@ -206,6 +344,11 @@ void setupBLE(const String &BLEName) {
 // ============================
 // Camera init
 // ============================
+// Configures and starts the onboard camera driver. Only actually does the
+// (relatively slow) init work once - cameraReady short-circuits repeat
+// calls. Called lazily, the first time it's actually needed (either by
+// stream=on or by an incoming HTTP request), rather than unconditionally
+// at boot.
 bool initCameraOnce() {
   if (cameraReady) return true;
 
@@ -215,6 +358,8 @@ bool initCameraOnce() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
+  // Pin assignments come from camera_pins.h, selected by the
+  // CAMERA_MODEL_* #define above.
   config.pin_d0 = Y2_GPIO_NUM;
   config.pin_d1 = Y3_GPIO_NUM;
   config.pin_d2 = Y4_GPIO_NUM;
@@ -236,6 +381,9 @@ bool initCameraOnce() {
   config.frame_size = FRAMESIZE_SVGA;
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  // With PSRAM available we can afford bigger frames and double-buffering;
+  // without it, fall back to a smaller frame size and a single buffer so
+  // it still fits in regular DRAM.
   config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
   config.jpeg_quality = 12;
   config.fb_count = psramFound() ? 2 : 1;
@@ -254,12 +402,16 @@ bool initCameraOnce() {
     return false;
   }
 
+  // OV3660-specific tweaks some of these camera modules need to look right
+  // (mirrored image / exposure) out of the box.
   sensor_t *s = esp_camera_sensor_get();
   if (s && s->id.PID == OV3660_PID) {
     s->set_vflip(s, 1);
     s->set_brightness(s, 1);
     s->set_saturation(s, -2);
   }
+  // Actual streaming frame size (overrides config.frame_size above, which
+  // only affected the initial buffer allocation).
   if (s) s->set_framesize(s, FRAMESIZE_QVGA);
 
   cameraReady = true;
@@ -270,6 +422,54 @@ bool initCameraOnce() {
 // ============================
 // HTTP Handlers
 // ============================
+// GET /cmd?c=<url-encoded command> - runs any command processCommand()
+// understands (led=on, relay=off, stream=on, wifi=status, etc.) over
+// plain WiFi instead of BLE/Serial, and replies with exactly the same
+// text a BLE client would have received as notifications, one per line.
+// This lets a WiFi-connected client (like the Python GUI, once it knows
+// the board's IP from an earlier "ip=" BLE notification) control the
+// board without needing to stay connected over BLE.
+static esp_err_t cmd_handler(httpd_req_t *req) {
+  String cmd = "";
+  size_t qlen = httpd_req_get_url_query_len(req);
+  if (qlen > 0 && qlen < 256) {
+    char query[256];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+      char value[220];
+      if (httpd_query_key_value(query, "c", value, sizeof(value)) == ESP_OK) {
+        cmd = urlDecode(String(value));
+      }
+    }
+  }
+
+  httpd_resp_set_type(req, "text/plain");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+  if (cmd.length() == 0) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_send(req, "err=no_command", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+  }
+
+  // Route this command's replies into httpReplyBuffer instead of (only)
+  // BLE/Serial, then send whatever it collected back as the HTTP body.
+  captureForHttp = true;
+  httpReplyBuffer = "";
+  processCommand(cmd);
+  captureForHttp = false;
+
+  if (httpReplyBuffer.length() == 0) {
+    httpd_resp_send(req, "ok", HTTPD_RESP_USE_STRLEN);
+  } else {
+    httpd_resp_send(req, httpReplyBuffer.c_str(), HTTPD_RESP_USE_STRLEN);
+  }
+  return ESP_OK;
+}
+
+// GET /jpg - a single JPEG snapshot from the camera. Requires WiFi to be
+// connected and stream=on to have been requested at least once
+// (streamEnabled); the camera itself is (re)initialized on demand here if
+// it isn't ready yet.
 static esp_err_t jpg_handler(httpd_req_t *req) {
   if (!wifiConnected || !streamEnabled) {
     httpd_resp_set_status(req, "503 Service Unavailable");
@@ -293,10 +493,15 @@ static esp_err_t jpg_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "image/jpeg");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   esp_err_t res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
-  esp_camera_fb_return(fb);
+  esp_camera_fb_return(fb);  // must always be returned to the driver, success or failure
   return res;
 }
 
+// GET /stream - an MJPEG multipart stream: repeatedly grabs a frame from
+// the camera and writes it as one multipart chunk, for as long as the
+// client stays connected and streamEnabled/wifiConnected remain true. This
+// is what a browser (or the Python GUI's MJPEGReader) opens directly to
+// display live video.
 static esp_err_t stream_handler(httpd_req_t *req) {
   if (!wifiConnected || !streamEnabled) {
     httpd_resp_set_status(req, "503 Service Unavailable");
@@ -316,6 +521,8 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   Serial.println("[HTTP] client connected to /stream");
 
   while (true) {
+    // Bail out promptly if streaming got turned off or WiFi dropped while
+    // we were mid-loop.
     if (!wifiConnected || !streamEnabled) break;
 
     camera_fb_t *fb = esp_camera_fb_get();
@@ -324,6 +531,9 @@ static esp_err_t stream_handler(httpd_req_t *req) {
       break;
     }
 
+    // Each frame: boundary marker, then a small text header carrying the
+    // real Content-Length, then the raw JPEG bytes themselves. Any failed
+    // chunk write means the client went away - stop streaming to it.
     if (httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)) != ESP_OK) {
       esp_camera_fb_return(fb);
       break;
@@ -342,14 +552,22 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     }
 
     esp_camera_fb_return(fb);
-    vTaskDelay(1);
+    vTaskDelay(1);  // yield briefly so other tasks (BLE, WiFi) get CPU time between frames
   }
 
-  httpd_resp_send_chunk(req, NULL, 0);
+  httpd_resp_send_chunk(req, NULL, 0);  // terminate the chunked response
   Serial.println("[HTTP] client left /stream");
   return ESP_OK;
 }
 
+// Starts the ESP-IDF HTTP server and registers the /jpg, /stream, and
+// /cmd handlers above. Only runs once (streamServerStarted guards repeat
+// calls) - called as soon as WiFi connects (see connectWiFi()), not only
+// when streaming starts, since /cmd needs to be reachable over WiFi even
+// if the camera stream itself is never turned on. It stays up for the
+// rest of the board's uptime once started, even if streaming is later
+// turned off (the /jpg and /stream handlers themselves check
+// streamEnabled and just reply 503 while it's off).
 void startCameraServer() {
   if (streamServerStarted) return;
 
@@ -366,27 +584,32 @@ void startCameraServer() {
 
   httpd_uri_t uri_jpg = { .uri = "/jpg", .method = HTTP_GET, .handler = jpg_handler, .user_ctx = NULL };
   httpd_uri_t uri_stream = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
+  httpd_uri_t uri_cmd = { .uri = "/cmd", .method = HTTP_GET, .handler = cmd_handler, .user_ctx = NULL };
 
   httpd_register_uri_handler(httpd, &uri_jpg);
   httpd_register_uri_handler(httpd, &uri_stream);
+  httpd_register_uri_handler(httpd, &uri_cmd);
 
   streamServerStarted = true;
-  Serial.println("[HTTP] server started (/jpg, /stream)");
+  Serial.println("[HTTP] server started (/jpg, /stream, /cmd)");
 }
 
 // ============================
 // WiFi connect helper
 // ============================
+// Attempts to join `ssid`/`pass` in station mode, blocking (with the LED
+// blinking) for up to ~10 seconds before giving up. Used both for the
+// wifi=on command and for the auto-connect attempt at boot.
 bool connectWiFi(const String &ssid, const String &pass) {
   wifiConnected = false;
 
-  WiFi.setAutoReconnect(false);
-  WiFi.persistent(false);
-  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);  // we manage (re)connect attempts ourselves via the wifi= command
+  WiFi.persistent(false);        // don't let the WiFi driver itself write creds to flash; we do that via Preferences
+  WiFi.setSleep(false);          // keep the radio fully awake for lower/steadier latency
 
   if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
 
-  WiFi.disconnect(true, true);
+  WiFi.disconnect(true, true);  // clear any previous connection/config before starting a fresh attempt
   delay(150);
 
   Serial.print("[WIFI] begin: ");
@@ -394,12 +617,18 @@ bool connectWiFi(const String &ssid, const String &pass) {
 
   WiFi.begin(ssid.c_str(), pass.c_str());
 
+  // Poll for up to 20 * 500ms = 10s, blinking the LED while we wait.
   for (int i = 0; i < 20; i++) {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnected = true;
       Serial.print("[WIFI] connected, IP=");
       Serial.println(WiFi.localIP());
-      digitalWrite(LED_BUILTIN, HIGH);
+      digitalWrite(LED_BUILTIN, HIGH);  // solid LED = connected
+      // Bring up the HTTP server (/jpg, /stream, /cmd) as soon as we have
+      // an IP, not only when streaming is first requested - /cmd needs to
+      // be reachable over WiFi for led=/relay=/stream= control even if
+      // the camera stream itself is never turned on.
+      if (!streamServerStarted) startCameraServer();
       return true;
     } else {
       ledState = !ledState;
@@ -419,6 +648,10 @@ bool connectWiFi(const String &ssid, const String &pass) {
 // ============================
 // Streaming control
 // ============================
+// Handles "stream=on": makes sure WiFi is up and the camera is
+// initialized, starts the HTTP server if it hasn't been started yet, and
+// notifies the client with the actual stream_url/jpg_url to open (built
+// from the board's current IP).
 void startStreamingAndReport() {
   Serial.printf("[DBG] startStreamingAndReport: wifiConnected=%d streamEnabled(before)=%d\n",
                 wifiConnected, streamEnabled);
@@ -433,6 +666,9 @@ void startStreamingAndReport() {
     return;
   }
 
+  // Only mark streaming enabled once we know both WiFi and the camera are
+  // actually ready - otherwise a status query could report stream=1 when
+  // nothing is really working.
   streamEnabled = true;
 
   if (!streamServerStarted) startCameraServer();
@@ -450,6 +686,10 @@ void startStreamingAndReport() {
   bleNotifyAndPrint(jpg);
 }
 
+// Handles "stream=off": just flips the flag off (the HTTP handlers check
+// it on every request/loop iteration and will stop serving frames), and
+// tells the client it's stopped. The camera driver and HTTP server itself
+// are left running/initialized so a later stream=on is instant.
 void stopStreamingAndReport() {
   streamEnabled = false;
   bleNotifyAndPrint("stream=0");
@@ -458,6 +698,9 @@ void stopStreamingAndReport() {
 // ============================
 // Debug state log
 // ============================
+// Periodic one-line snapshot of the board's whole state, printed to
+// Serial only (not sent over BLE) - purely a debugging aid. Controlled by
+// ENABLE_STATE_LOG / STATE_LOG_INTERVAL_MS near the top of the file.
 #if ENABLE_STATE_LOG
 void logState() {
   Serial.printf(
@@ -476,7 +719,7 @@ void logState() {
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(RELAY_BUILTIN, OUTPUT);
-  digitalWrite(RELAY_BUILTIN, LOW);
+  digitalWrite(RELAY_BUILTIN, LOW);  // relay/lock starts de-energized
   digitalWrite(LED_BUILTIN, LOW);
 
   Serial.begin(115200);
@@ -486,6 +729,10 @@ void setup() {
 
   rxMutex = xSemaphoreCreateMutex();
 
+  // Load persisted WiFi credentials + connect intent from flash (NVS).
+  // wifiWanted reflects whatever the last wifi=on/wifi=off command set it
+  // to, so a reboot only reconnects automatically if the board was meant
+  // to be online when it last went down.
   wifiPrefs.begin("wifi", false);
   Router_SSID = wifiPrefs.getString("ssid", "");
   Router_Password = wifiPrefs.getString("pass", "");
@@ -506,11 +753,16 @@ void setup() {
 // ============================
 // Command dispatch (shared by BLE writes and Serial input)
 // ============================
+// Parses a single command string (already assembled from either the BLE
+// characteristic or a line typed into Serial) and acts on every key it
+// recognizes. Each action replies via bleNotifyAndPrint(), which both
+// notifies any connected BLE client and echoes to Serial - so the same
+// function serves both input paths uniformly.
 void processCommand(const String &command) {
     Serial.print("[CMD] ");
     Serial.println(command);
 
-    // LED
+    // LED: led=on / led=off / led=status
     String LED_State = getValue(command, "led");
     if (LED_State == "on") {
       ledOn = true;
@@ -524,7 +776,7 @@ void processCommand(const String &command) {
       bleNotifyAndPrint(ledOn ? "led=1" : "led=0");
     }
 
-    // Relay
+    // Relay (mailbox lock/latch): relay=on / relay=off / relay=status
     String Relay_State = getValue(command, "relay");
     if (Relay_State == "on") {
       relayOn = true;
@@ -538,7 +790,10 @@ void processCommand(const String &command) {
       bleNotifyAndPrint(relayOn ? "relay=1" : "relay=0");
     }
 
-    // WiFi creds
+    // WiFi credentials: router_ssid=<name>, router_password=<pass>.
+    // Each is saved to flash immediately on receipt, independent of
+    // whether a "wifi=on" follows in the same command - so partial
+    // provisioning (e.g. sending just a new password) still persists.
     String s = getValue(command, "router_ssid");
     if (s.length()) {
       Router_SSID = s;
@@ -556,18 +811,28 @@ void processCommand(const String &command) {
       bleNotifyAndPrint("ok=router_password");
     }
 
-    // WiFi control
+    // WiFi control: wifi=on / wifi=off / wifi=status / wifi=scan
     String Wifi_State = getValue(command, "wifi");
     if (Wifi_State == "on") {
       if (Router_SSID.length() == 0) {
         bleNotifyAndPrint("err=no_ssid");
       } else {
+        // Record "we want to be connected" before attempting, so even a
+        // failed attempt still causes a reconnect retry on the next boot
+        // (the user's intent was to be online, not necessarily that it
+        // has to have already worked once).
         wifiWanted = true;
         wifiPrefs.putBool("wanted", true);
         bool ok = connectWiFi(Router_SSID, Router_Password);
         bleNotifyAndPrint(ok ? "wifi=1" : "wifi=0");
+        // Report our IP so a client can start talking to /cmd, /jpg, and
+        // /stream directly over WiFi instead of needing to stay on BLE.
+        if (ok) bleNotifyAndPrint("ip=" + WiFi.localIP().toString());
       }
     } else if (Wifi_State == "off") {
+      // Explicit disconnect: clear the "wanted" intent too, so the board
+      // stays offline across a reboot until told otherwise (wifi=on or
+      // new credentials), instead of silently reconnecting on its own.
       wifiWanted = false;
       wifiPrefs.putBool("wanted", false);
       WiFi.disconnect(true);
@@ -578,7 +843,15 @@ void processCommand(const String &command) {
       bleNotifyAndPrint("wifi=0");
     } else if (Wifi_State == "status") {
       bleNotifyAndPrint(wifiConnected ? "wifi=1" : "wifi=0");
+      // Same reasoning as the wifi=on branch above: a client that just
+      // (re)connected over BLE needs the IP to be able to switch to
+      // controlling the board over WiFi instead.
+      if (wifiConnected) bleNotifyAndPrint("ip=" + WiFi.localIP().toString());
     } else if (Wifi_State == "scan") {
+      // Scans for nearby networks and reports each one back individually
+      // as it's found (rather than one giant combined message, which
+      // could exceed the BLE notify payload limit), followed by a
+      // wifi_scan_done marker so the client knows the list is complete.
       Serial.println("[WIFI] scanning...");
       if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
       int n = WiFi.scanNetworks();
@@ -591,10 +864,10 @@ void processCommand(const String &command) {
         }
         bleNotifyAndPrint("wifi_scan_done=" + String(n));
       }
-      WiFi.scanDelete();
+      WiFi.scanDelete();  // free the scan result memory
     }
 
-    // Stream control
+    // Stream control: stream=on / stream=off / stream=status
     String Stream_State = getValue(command, "stream");
     if (Stream_State == "on") {
       startStreamingAndReport();
@@ -617,6 +890,8 @@ void loop() {
   uint32_t now = millis();
 
 #if ENABLE_STATE_LOG
+  // Runs on its own timer, independent of the 50ms command-poll gate below,
+  // so it never gets skipped/delayed by that early return.
   static uint32_t lastStateLog = 0;
   if (now - lastStateLog >= STATE_LOG_INTERVAL_MS) {
     lastStateLog = now;
@@ -625,7 +900,8 @@ void loop() {
 #endif
 
   // Serial commands: accumulate a line, dispatch on newline. Handles any
-  // Serial Monitor line-ending setting (CR, LF, or CRLF).
+  // Serial Monitor line-ending setting (CR, LF, or CRLF), and also runs
+  // ahead of the 50ms tick gate below so typed commands are never delayed.
   static String serialLine;
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
@@ -640,10 +916,14 @@ void loop() {
     }
   }
 
+  // Throttle the rest of the loop body (BLE command polling) to run at
+  // most once every 50ms, instead of as fast as possible.
   if (now - lastTick < 50) return;
   lastTick = now;
 
-  // BLE commands
+  // BLE commands: snapshot and clear rxload under the mutex, then dispatch
+  // outside the lock so processCommand()'s (potentially slow, e.g. WiFi
+  // connect/scan) work doesn't hold up the BLE callback task.
   String bleCommand;
   if (deviceConnected) {
     xSemaphoreTake(rxMutex, portMAX_DELAY);
