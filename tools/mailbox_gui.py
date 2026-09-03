@@ -12,9 +12,11 @@ import queue
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 from typing import Optional
 
+import cv2
+import numpy as np
 import requests
 from bleak import BleakClient, BleakScanner
 from PIL import Image, ImageTk
@@ -154,6 +156,10 @@ class MailboxApp(tk.Tk):
         self.ble = BLEWorker(self.event_q)
         self.stream_reader: Optional[MJPEGReader] = None
 
+        self.recording = False
+        self.video_writer: Optional[cv2.VideoWriter] = None
+        self.video_path: Optional[str] = None
+
         self._apply_dark_theme()
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -219,7 +225,7 @@ class MailboxApp(tk.Tk):
         self.network_list.bind("<<ListboxSelect>>", self._on_network_selected)
         self._known_networks = []  # in-order, de-duplicated SSIDs from the last scan
 
-        ttk.Label(wifi, text="SSID").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(wifi, text="Network Name").grid(row=2, column=0, sticky="w", padx=6, pady=4)
         self.ssid_entry = ttk.Entry(wifi)
         self.ssid_entry.grid(row=2, column=1, sticky="ew", padx=6, pady=4)
 
@@ -227,7 +233,11 @@ class MailboxApp(tk.Tk):
         self.pass_entry = ttk.Entry(wifi, show="*")
         self.pass_entry.grid(row=3, column=1, sticky="ew", padx=6, pady=4)
 
-        ttk.Button(wifi, text="Connect WiFi", command=self._wifi_connect).grid(row=4, column=0, columnspan=2, pady=6)
+        wifi_btns = ttk.Frame(wifi)
+        wifi_btns.grid(row=4, column=0, columnspan=2, pady=6)
+        ttk.Button(wifi_btns, text="Connect", command=self._wifi_connect).pack(side="left", padx=4)
+        ttk.Button(wifi_btns, text="Disconnect", command=self._wifi_disconnect).pack(side="left", padx=4)
+
         self.wifi_var = tk.StringVar(value="WiFi: ?")
         ttk.Label(wifi, textvariable=self.wifi_var).grid(row=5, column=0, columnspan=2, pady=(0, 4))
 
@@ -238,6 +248,13 @@ class MailboxApp(tk.Tk):
         btns.pack(pady=4)
         ttk.Button(btns, text="Stream On", command=lambda: self.ble.send("stream=on")).pack(side="left", padx=4)
         ttk.Button(btns, text="Stream Off", command=self._stream_off).pack(side="left", padx=4)
+
+        rec_row = ttk.Frame(stream)
+        rec_row.pack(pady=(0, 4))
+        self.record_btn_var = tk.StringVar(value="Start Recording")
+        ttk.Button(rec_row, textvariable=self.record_btn_var, command=self._toggle_recording).pack(side="left", padx=4)
+        self.recording_status_var = tk.StringVar(value="")
+        ttk.Label(rec_row, textvariable=self.recording_status_var, foreground=ERROR_FG).pack(side="left", padx=8)
 
         self.video_label = ttk.Label(stream, text="(no stream)", anchor="center", background=FIELD_BG, foreground=MUTED_FG)
         self.video_label.pack(fill="both", expand=True, padx=6, pady=6)
@@ -262,6 +279,9 @@ class MailboxApp(tk.Tk):
             return
         self.ble.send(f"router_ssid={ssid};router_password={password};wifi=on")
 
+    def _wifi_disconnect(self):
+        self.ble.send("wifi=off")
+
     def _refresh_status(self):
         self.ble.send("led=status;relay=status;wifi=status;stream=status")
 
@@ -282,6 +302,41 @@ class MailboxApp(tk.Tk):
     def _stream_off(self):
         self.ble.send("stream=off")
         self._stop_stream_reader()
+
+    def _toggle_recording(self):
+        if self.recording:
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self):
+        if self.stream_reader is None:
+            self._log("[GUI] Start the stream before recording", tag="error")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save video as",
+            defaultextension=".avi",
+            filetypes=[("AVI video", "*.avi")],
+        )
+        if not path:
+            return
+        self.video_path = path
+        self.video_writer = None  # created lazily once we know the frame size
+        self.recording = True
+        self.record_btn_var.set("Stop Recording")
+        self.recording_status_var.set("● REC")
+        self._log(f"Recording to {path}")
+
+    def _stop_recording(self):
+        self.recording = False
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.video_writer = None
+        self.record_btn_var.set("Start Recording")
+        self.recording_status_var.set("")
+        if self.video_path:
+            self._log(f"Saved recording: {self.video_path}", tag="ok")
+        self.video_path = None
 
     # --- event queue draining (runs on the Tk main thread) ---
 
@@ -374,18 +429,32 @@ class MailboxApp(tk.Tk):
         if self.stream_reader:
             self.stream_reader.stop()
             self.stream_reader = None
+        if self.recording:
+            self._stop_recording()
         self.video_label.configure(image="", text="(no stream)")
         self.video_label.image = None
 
     def _show_frame(self, jpeg_bytes: bytes):
         try:
-            img = Image.open(io.BytesIO(jpeg_bytes))
-            img.thumbnail((380, 380))
-            photo = ImageTk.PhotoImage(img)
+            img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+            if self.recording:
+                self._write_video_frame(img)
+
+            display_img = img.copy()
+            display_img.thumbnail((380, 380))
+            photo = ImageTk.PhotoImage(display_img)
             self.video_label.configure(image=photo, text="")
             self.video_label.image = photo  # keep a reference alive
         except Exception as e:
             self._log(f"[VIDEO] frame decode error: {e}", tag="error")
+
+    def _write_video_frame(self, img: Image.Image):
+        frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        if self.video_writer is None:
+            h, w = frame_bgr.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+            self.video_writer = cv2.VideoWriter(self.video_path, fourcc, 10.0, (w, h))
+        self.video_writer.write(frame_bgr)
 
     def _log(self, text: str, tag: Optional[str] = None):
         self.log_text.configure(state="normal")

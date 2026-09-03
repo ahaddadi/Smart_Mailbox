@@ -54,6 +54,7 @@ String rxload = "";
 String Router_SSID = "";
 String Router_Password = "";
 bool wifiConnected = false;
+bool wifiWanted = false;  // persisted: should we auto-connect on boot?
 
 Preferences wifiPrefs;
 bool ledState = false;
@@ -488,14 +489,17 @@ void setup() {
   wifiPrefs.begin("wifi", false);
   Router_SSID = wifiPrefs.getString("ssid", "");
   Router_Password = wifiPrefs.getString("pass", "");
+  wifiWanted = wifiPrefs.getBool("wanted", false);
 
   setupBLE("Smart_Mailbox");
   Serial.println("[DBG] Bluetooth is ready!");
 
-  if (Router_SSID.length() > 0) {
+  if (Router_SSID.length() > 0 && wifiWanted) {
     Serial.print("[DBG] Auto-connecting with saved WiFi: ");
     Serial.println(Router_SSID);
     connectWiFi(Router_SSID, Router_Password);
+  } else if (Router_SSID.length() > 0) {
+    Serial.println("[DBG] Saved WiFi found but last state was disconnected - not auto-connecting");
   }
 }
 
@@ -558,10 +562,14 @@ void processCommand(const String &command) {
       if (Router_SSID.length() == 0) {
         bleNotifyAndPrint("err=no_ssid");
       } else {
+        wifiWanted = true;
+        wifiPrefs.putBool("wanted", true);
         bool ok = connectWiFi(Router_SSID, Router_Password);
         bleNotifyAndPrint(ok ? "wifi=1" : "wifi=0");
       }
     } else if (Wifi_State == "off") {
+      wifiWanted = false;
+      wifiPrefs.putBool("wanted", false);
       WiFi.disconnect(true);
       wifiConnected = false;
       streamEnabled = false;
