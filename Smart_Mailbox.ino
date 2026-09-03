@@ -118,7 +118,12 @@ bool streamEnabled = false;       // true once stream=on has succeeded; gates th
 bool streamServerStarted = false; // true once the HTTP server (httpd) has been started (only done once)
 bool cameraReady = false;         // true once the camera driver has been initialized (only done once)
 
-httpd_handle_t httpd = NULL;  // handle for the ESP-IDF HTTP server serving /jpg, /stream, and /cmd
+// Two separate HTTP server instances - see startCameraServer() for why:
+// /stream's handler blocks in an infinite loop for as long as a client
+// stays connected, which would otherwise starve every other request on
+// the same server (ESP-IDF's httpd services one request at a time).
+httpd_handle_t httpd = NULL;        // control server on port 80: /jpg, /cmd
+httpd_handle_t streamHttpd = NULL;  // dedicated streaming server on port 81: /stream only
 
 // When true, every reply that would normally only go to BLE/Serial is also
 // appended to httpReplyBuffer instead of being sent to those. Set around a
@@ -560,38 +565,56 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-// Starts the ESP-IDF HTTP server and registers the /jpg, /stream, and
-// /cmd handlers above. Only runs once (streamServerStarted guards repeat
-// calls) - called as soon as WiFi connects (see connectWiFi()), not only
-// when streaming starts, since /cmd needs to be reachable over WiFi even
-// if the camera stream itself is never turned on. It stays up for the
-// rest of the board's uptime once started, even if streaming is later
-// turned off (the /jpg and /stream handlers themselves check
+// Starts two ESP-IDF HTTP server instances and registers the handlers
+// above. Only runs once (streamServerStarted guards repeat calls) -
+// called as soon as WiFi connects (see connectWiFi()), not only when
+// streaming starts, since /cmd needs to be reachable over WiFi even if
+// the camera stream itself is never turned on. Both servers stay up for
+// the rest of the board's uptime once started, even if streaming is
+// later turned off (the /jpg and /stream handlers themselves check
 // streamEnabled and just reply 503 while it's off).
+//
+// /stream is deliberately on its own server/port (81) rather than
+// sharing the control server (80) with /jpg and /cmd: ESP-IDF's httpd
+// services one request at a time per server instance, and stream_handler
+// blocks in an infinite loop for as long as a client stays connected. If
+// it shared a server with /cmd, an open video stream would make every
+// LED/relay/status command time out until the stream stopped - exactly
+// the read-timeout behavior this split avoids. (This mirrors how
+// Espressif's own CameraWebServer example is structured.)
 void startCameraServer() {
   if (streamServerStarted) return;
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   config.ctrl_port = 32768;
-  config.max_uri_handlers = 8;
+  config.max_uri_handlers = 4;
 
-  if (httpd_start(&httpd, &config) != ESP_OK) {
-    Serial.println("[HTTP] server start failed");
+  if (httpd_start(&httpd, &config) == ESP_OK) {
+    httpd_uri_t uri_jpg = { .uri = "/jpg", .method = HTTP_GET, .handler = jpg_handler, .user_ctx = NULL };
+    httpd_uri_t uri_cmd = { .uri = "/cmd", .method = HTTP_GET, .handler = cmd_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(httpd, &uri_jpg);
+    httpd_register_uri_handler(httpd, &uri_cmd);
+  } else {
+    Serial.println("[HTTP] control server start failed");
     httpd = NULL;
-    return;
   }
 
-  httpd_uri_t uri_jpg = { .uri = "/jpg", .method = HTTP_GET, .handler = jpg_handler, .user_ctx = NULL };
-  httpd_uri_t uri_stream = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
-  httpd_uri_t uri_cmd = { .uri = "/cmd", .method = HTTP_GET, .handler = cmd_handler, .user_ctx = NULL };
+  httpd_config_t stream_config = HTTPD_DEFAULT_CONFIG();
+  stream_config.server_port = 81;
+  stream_config.ctrl_port = 32769;  // must differ from the control server's ctrl_port above
+  stream_config.max_uri_handlers = 2;
 
-  httpd_register_uri_handler(httpd, &uri_jpg);
-  httpd_register_uri_handler(httpd, &uri_stream);
-  httpd_register_uri_handler(httpd, &uri_cmd);
+  if (httpd_start(&streamHttpd, &stream_config) == ESP_OK) {
+    httpd_uri_t uri_stream = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(streamHttpd, &uri_stream);
+  } else {
+    Serial.println("[HTTP] stream server start failed");
+    streamHttpd = NULL;
+  }
 
   streamServerStarted = true;
-  Serial.println("[HTTP] server started (/jpg, /stream, /cmd)");
+  Serial.println("[HTTP] servers started (:80 /jpg /cmd, :81 /stream)");
 }
 
 // ============================
@@ -674,7 +697,7 @@ void startStreamingAndReport() {
   if (!streamServerStarted) startCameraServer();
 
   String ip = WiFi.localIP().toString();
-  String url = "stream_url=http://" + ip + "/stream";
+  String url = "stream_url=http://" + ip + ":81/stream";  // dedicated stream server - see startCameraServer()
   String jpg = "jpg_url=http://" + ip + "/jpg";
 
   Serial.print("[DBG] ");
@@ -879,7 +902,7 @@ void processCommand(const String &command) {
         // re-send the URLs too, so a client that just (re)connected while
         // streaming was already running can resume showing video
         String ip = WiFi.localIP().toString();
-        bleNotifyAndPrint("stream_url=http://" + ip + "/stream");
+        bleNotifyAndPrint("stream_url=http://" + ip + ":81/stream");
         bleNotifyAndPrint("jpg_url=http://" + ip + "/jpg");
       }
     }
