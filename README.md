@@ -12,9 +12,9 @@ module. It can:
 - Be controlled over **BLE, USB Serial, or plain HTTP** — whichever is most
   convenient at the time
 
-A desktop GUI app (`tools/mailbox_gui.py`) acts as the "phone app" for this
-project: connect, provision WiFi, flip the LED/relay, watch and record the
-video stream.
+A desktop GUI app (`tools/mailbox_gui.py`) and a native iOS app
+(`ios/SmartMailbox/`) both act as the "phone app" for this project: connect,
+provision WiFi, flip the LED/relay, watch and record the video stream.
 
 ## Hardware
 
@@ -38,6 +38,10 @@ tools/
   mailbox_gui.py          Desktop GUI: BLE + HTTP control, live video, recording
   ble_console.py          Minimal interactive BLE command-line client
   requirements.txt        Python dependencies for both tools
+ios/SmartMailbox/
+  SmartMailboxApp.xcodeproj  Xcode project
+  SmartMailboxApp/           Swift sources for the native iOS app
+  README.md                  iOS-specific setup instructions
 ```
 
 ## Firmware setup
@@ -224,6 +228,27 @@ Scans for the board, connects, subscribes to notifications, and drops you
 into a prompt where you can type raw commands (`led=on`, `wifi=status`,
 `stream=on`, ...) and see the replies — useful for quick testing without
 the full GUI.
+
+## iOS app
+
+A native SwiftUI app under [`ios/SmartMailbox/`](ios/SmartMailbox/) mirrors
+every feature of the desktop GUI, using the same BLE service/characteristic
+and HTTP `/cmd`, `/jpg`, `/stream` protocol described above:
+
+- Connects over BLE (scans by advertised name, same as the Python tools),
+  auto-subscribes to notifications, and reconnects automatically if the
+  link drops.
+- Toggles LED and relay over HTTP once the board's IP and auth token are
+  known (cached in `UserDefaults`), falling back to BLE otherwise.
+- Scans for WiFi networks and connects/disconnects, over BLE.
+- Displays the live MJPEG camera stream and records it to Photos.
+- Shows a color-coded activity log, same translation logic as the desktop
+  GUI's log view.
+
+Open `ios/SmartMailbox/SmartMailboxApp.xcodeproj` in Xcode (16.0+ deployment
+target) — see [`ios/SmartMailbox/README.md`](ios/SmartMailbox/README.md)
+for signing setup, required permissions, and the Simulator's Bluetooth
+limitation.
 
 ## Security notes
 
