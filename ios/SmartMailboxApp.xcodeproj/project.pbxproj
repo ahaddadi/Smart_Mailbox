@@ -1,0 +1,349 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		21EA6C338932A19AE48DA630 /* SmartMailboxAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */; };
+		DE247B749E68F94E0419ABA5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */; };
+		15A0AE7A27CDA07E914154BF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB34062D4C48D2AA7F0961A4 /* AppState.swift */; };
+		5F6E7025855F0B1CF26CBBEC /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6AC57FCAF4402A9649843 /* BLEManager.swift */; };
+		8DE9E4082E9632BBA0FCCBB3 /* ProtocolTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */; };
+		0ECF5101CD0C6AE2346116DD /* MJPEGStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */; };
+		FF151290FE1CF5D7AF0E0230 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */; };
+		3EFE19E61D2EA2931A576BEB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00860A0418F2800028E1BA37 /* Theme.swift */; };
+		4B215EE5CAC8211B85F172CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4736E0EBAB7C9F94F193E7F /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartMailboxApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartMailboxAppApp.swift; sourceTree = "<group>"; };
+		DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		CB34062D4C48D2AA7F0961A4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		F3D6AC57FCAF4402A9649843 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEManager.swift; sourceTree = "<group>"; };
+		CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTranslator.swift; sourceTree = "<group>"; };
+		ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MJPEGStream.swift; sourceTree = "<group>"; };
+		EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>"; };
+		00860A0418F2800028E1BA37 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		C5BF6A3778EBE602195A2848 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B4736E0EBAB7C9F94F193E7F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D5C2871F94D9E649B0BB7D23 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		88B878E16C06BC1810B33505 = {
+			isa = PBXGroup;
+			children = (
+				A1AECAE1B251F899B4D06AA8 /* SmartMailboxApp */,
+				03A4B53E76BEE5998BFC1B0D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		03A4B53E76BEE5998BFC1B0D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1AECAE1B251F899B4D06AA8 /* SmartMailboxApp */ = {
+			isa = PBXGroup;
+			children = (
+				8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */,
+				DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */,
+				CB34062D4C48D2AA7F0961A4 /* AppState.swift */,
+				F3D6AC57FCAF4402A9649843 /* BLEManager.swift */,
+				CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */,
+				ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */,
+				EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */,
+				00860A0418F2800028E1BA37 /* Theme.swift */,
+				B4736E0EBAB7C9F94F193E7F /* Assets.xcassets */,
+				C5BF6A3778EBE602195A2848 /* Info.plist */,
+			);
+			path = SmartMailboxApp;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		16C451103FE36CD2F806D387 /* SmartMailboxApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E0CC29968D45858238B736EC /* Build configuration list for PBXNativeTarget "SmartMailboxApp" */;
+			buildPhases = (
+				DE9FD432536C6874931E4673 /* Sources */,
+				D5C2871F94D9E649B0BB7D23 /* Frameworks */,
+				05984B0EC92AE91539C00FD7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SmartMailboxApp;
+			productName = SmartMailboxApp;
+			productReference = C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C7AD6CE9E6AFDA9930200D5D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					16C451103FE36CD2F806D387 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 52361401B7DA44777291921D /* Build configuration list for PBXProject "SmartMailboxApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 88B878E16C06BC1810B33505;
+			productRefGroup = 03A4B53E76BEE5998BFC1B0D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				16C451103FE36CD2F806D387 /* SmartMailboxApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		05984B0EC92AE91539C00FD7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B215EE5CAC8211B85F172CE /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DE9FD432536C6874931E4673 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				21EA6C338932A19AE48DA630 /* SmartMailboxAppApp.swift in Sources */,
+				DE247B749E68F94E0419ABA5 /* ContentView.swift in Sources */,
+				15A0AE7A27CDA07E914154BF /* AppState.swift in Sources */,
+				5F6E7025855F0B1CF26CBBEC /* BLEManager.swift in Sources */,
+				8DE9E4082E9632BBA0FCCBB3 /* ProtocolTranslator.swift in Sources */,
+				0ECF5101CD0C6AE2346116DD /* MJPEGStream.swift in Sources */,
+				FF151290FE1CF5D7AF0E0230 /* VideoRecorder.swift in Sources */,
+				3EFE19E61D2EA2931A576BEB /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0501C435E6867B5CD50B6576 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		769E72A22D87D0C2BF9DB8F6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		FDE17DFD7BEDAA0449F5D01B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartMailboxApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.SmartMailboxApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4B08DF9A72FB71BC41391AA9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartMailboxApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.SmartMailboxApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		52361401B7DA44777291921D /* Build configuration list for PBXProject "SmartMailboxApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0501C435E6867B5CD50B6576 /* Debug */,
+				769E72A22D87D0C2BF9DB8F6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E0CC29968D45858238B736EC /* Build configuration list for PBXNativeTarget "SmartMailboxApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FDE17DFD7BEDAA0449F5D01B /* Debug */,
+				4B08DF9A72FB71BC41391AA9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C7AD6CE9E6AFDA9930200D5D /* Project object */;
+}

@@ -5,3 +5,12 @@ build/
 .vscode/
 tools/mailbox_gui_config.json
 *.avi
+
+# Xcode
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+DerivedData/
+.build/
+*.xcscmblueprint
+*.xccheckout
