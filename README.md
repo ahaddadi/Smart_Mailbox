@@ -278,8 +278,9 @@ This is a hobby project, not a hardened product:
   to `0` and reflash to fall back to fully open BLE if pairing ever
   causes connection trouble with a particular central).
 - **WiFi credentials are stored in plaintext** in both BLE transit and
-  on-flash storage (as is the auth token itself, in both the board's
-  flash and the GUI's local `mailbox_gui_config.json` cache).
+  on-flash storage (as is the auth token itself, in the board's flash, the
+  desktop GUI's local `mailbox_gui_config.json` cache, and the iOS app's
+  `UserDefaults` cache).
 - Neither HTTP port is exposed to the internet unless you explicitly
   configure port forwarding on your router.
 
