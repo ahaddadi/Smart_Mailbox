@@ -100,8 +100,20 @@ extension BLEManager: CBCentralManagerDelegate {
                 startScan()
             }
         } else {
-            statusText = "Bluetooth unavailable"
+            statusText = "Bluetooth unavailable: \(Self.describe(central.state))"
             isConnected = false
+        }
+    }
+
+    private static func describe(_ state: CBManagerState) -> String {
+        switch state {
+        case .unknown: return "initializing"
+        case .resetting: return "resetting"
+        case .unsupported: return "no Bluetooth hardware (Simulator has none)"
+        case .unauthorized: return "permission denied - enable in Settings > Privacy > Bluetooth"
+        case .poweredOff: return "Bluetooth is off - enable it in Control Center or Settings"
+        case .poweredOn: return "ready"
+        @unknown default: return "unknown state"
         }
     }
 
