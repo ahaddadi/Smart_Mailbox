@@ -45,15 +45,23 @@
 //
 // Security
 // --------
-// BLE has no pairing/bonding/encryption configured - anyone in range who
-// knows the service/characteristic UUIDs (published in this repo) can
-// connect and issue commands. That's a real, currently-unaddressed gap;
-// what IS addressed is the HTTP surface: every HTTP request must include
-// a per-device secret token (?t=...) that is generated on first boot and
-// obtainable ONLY over BLE/Serial (see "auth=status"/"auth=new" in
-// processCommand() and checkHttpAuth()), never over HTTP itself. So
-// merely being on the same WiFi network is no longer enough to drive the
-// relay or view the camera - an attacker still needs BLE proximity first.
+// The command/notify characteristic requires an encrypted, paired BLE
+// link (PROPERTY_READ_ENC/PROPERTY_WRITE_ENC below) - a BLE central has
+// to complete pairing with the board before it can read, write, or
+// receive notifications on it at all. Pairing uses "Just Works" (no PIN
+// screen; ESP_IO_CAP_NONE) with bonding, so it only has to happen once
+// per central and doesn't require the user to type or confirm anything -
+// see setupBLE() and ENABLE_BLE_PAIRING above. This can be disabled
+// (falling back to fully open BLE, as before) by setting
+// ENABLE_BLE_PAIRING to 0, in case pairing causes connection problems
+// with a particular BLE central.
+//
+// Separately, every HTTP request must include a per-device secret token
+// (?t=...) that is generated on first boot and obtainable ONLY over
+// BLE/Serial (see "auth=status"/"auth=new" in processCommand() and
+// checkHttpAuth()), never over HTTP itself. So merely being on the same
+// WiFi network is not enough to drive the relay or view the camera - an
+// attacker needs a paired BLE connection first.
 //
 // Robustness
 // ----------
@@ -71,6 +79,7 @@
 #include "BLEServer.h"
 #include "BLEUtils.h"
 #include "BLE2902.h"
+#include "BLESecurity.h"
 
 #include <WiFi.h>
 #include <Preferences.h>
@@ -101,6 +110,15 @@
 // Set to 0 to silence the periodic state dump below.
 #define ENABLE_STATE_LOG 1
 #define STATE_LOG_INTERVAL_MS 5000
+
+// ============================
+// BLE pairing
+// ============================
+// Set to 0 to fall back to the previous open, unauthenticated BLE
+// behavior (no pairing required) if pairing ever causes connection
+// problems with your BLE central - a quick escape hatch during testing,
+// without having to dig through the diff that added this.
+#define ENABLE_BLE_PAIRING 1
 
 // ============================
 // BLE UUIDs
@@ -368,16 +386,48 @@ void setupBLE(const String &BLEName) {
 
   BLEDevice::init(ble_name);
   BLEDevice::setMTU(185);  // allow room for stream_url/jpg_url notifications; still capped by what the central negotiates
+
+#if ENABLE_BLE_PAIRING
+  // Require pairing/bonding before the command characteristic can be
+  // used at all (see PROPERTY_*_ENC below). "Just Works" (ESP_IO_CAP_NONE,
+  // no MITM) means no PIN is ever displayed or typed - pairing completes
+  // automatically, but the link still ends up encrypted and the bond is
+  // remembered (NimBLE persists it to flash) so it only has to happen
+  // once per central. The library forces this negotiation automatically
+  // the moment a central connects (see BLEServer's connect handler) -
+  // no code is needed here beyond configuring the parameters.
+  //
+  // setSecurityCallbacks() is registered with the library's own base
+  // BLESecurityCallbacks (every method already has a safe, logging
+  // default implementation - see BLESecurity.cpp) purely so pairing
+  // outcomes get printed to Serial; every callback the library invokes
+  // is already null-checked, so this call is optional, not required.
+  BLEDevice::setSecurityCallbacks(new BLESecurityCallbacks());
+  BLESecurity *pSecurity = new BLESecurity();
+  pSecurity->setAuthenticationMode(true, false, true);  // bonding=yes, MITM=no (Just Works), Secure Connections=yes
+  pSecurity->setCapability(ESP_IO_CAP_NONE);             // no display/keyboard -> Just Works, no PIN prompt
+#endif
+
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new MyServerCallbacks());
 
   // Custom command service: one characteristic used for both writing
   // commands (from the client) and receiving notifications (replies/events
-  // sent back by the board).
+  // sent back by the board). PROPERTY_*_ENC requires the link to be
+  // encrypted (i.e. paired, when ENABLE_BLE_PAIRING) for that operation -
+  // NOTIFY has no _ENC variant since notifications simply ride whatever
+  // encryption state the link is already in.
   BLEService *service = server->createService(SERVICE_UUID);
+#if ENABLE_BLE_PAIRING
+  pCharacteristic = service->createCharacteristic(
+    MESSAGE_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_READ_ENC | BLECharacteristic::PROPERTY_NOTIFY
+      | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_ENC);
+#else
   pCharacteristic = service->createCharacteristic(
     MESSAGE_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_WRITE);
+#endif
 
   pCharacteristic->setCallbacks(new MyCallbacks());
   pCharacteristic->addDescriptor(new BLE2902());  // required for the client to be able to enable notifications
