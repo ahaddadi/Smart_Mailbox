@@ -39,6 +39,13 @@ final class BLEManager: NSObject, ObservableObject {
     private var centralManager: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var commandCharacteristic: CBCharacteristic?
+    // Set when connect() is called before the radio is ready (e.g. right at
+    // launch, while CBCentralManager is still resolving the Bluetooth
+    // permission prompt and its state is still .unknown/.resetting rather
+    // than .poweredOn). centralManagerDidUpdateState retries automatically
+    // once the state actually becomes .poweredOn, so a Connect tap made too
+    // early isn't silently dropped.
+    private var connectPending = false
 
     override init() {
         super.init()
@@ -47,9 +54,15 @@ final class BLEManager: NSObject, ObservableObject {
 
     func connect() {
         guard centralManager.state == .poweredOn else {
-            statusText = "Bluetooth not ready (check Settings > Bluetooth)"
+            connectPending = true
+            statusText = "Waiting for Bluetooth..."
             return
         }
+        startScan()
+    }
+
+    private func startScan() {
+        connectPending = false
         if let existing = peripheral {
             centralManager.cancelPeripheralConnection(existing)
         }
@@ -82,7 +95,11 @@ final class BLEManager: NSObject, ObservableObject {
 
 extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state != .poweredOn {
+        if central.state == .poweredOn {
+            if connectPending {
+                startScan()
+            }
+        } else {
             statusText = "Bluetooth unavailable"
             isConnected = false
         }
