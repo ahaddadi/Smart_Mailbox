@@ -93,10 +93,18 @@ dispatcher (`processCommand()` in the firmware):
    network, so initial provisioning always happens here.
 2. **USB Serial** — type a command into the Serial Monitor (115200 baud)
    and press Enter. Useful for testing without any BLE client.
-3. **HTTP**, once WiFi is connected — `GET http://<board-ip>/cmd?c=<url-encoded command>`
+3. **HTTP**, once WiFi is connected — `GET http://<board-ip>/cmd?c=<url-encoded command>&t=<auth token>`
    runs the same command and replies with the same text a BLE notification
    would have carried. A client learns the board's IP from the `ip=...`
-   notification sent after a successful `wifi=on` or `wifi=status`.
+   notification sent after a successful `wifi=on` or `wifi=status`, and
+   the auth token from `auth=status` — see "Security" below; every HTTP
+   request without a valid `t=` is rejected with `401 Unauthorized`.
+
+**Values containing `=`, `;`, or a space** (SSIDs and passwords, mainly)
+must be percent-encoded by the sender — the parser treats a raw one of
+those characters as structural. E.g. a network named `My House WiFi` is
+sent as `router_ssid=My%20House%20WiFi`. The GUI does this automatically
+(`urllib.parse.quote`); the firmware reverses it with `urlDecode()`.
 
 ### Command reference
 
@@ -106,18 +114,21 @@ dispatcher (`processCommand()` in the firmware):
 | `led=status` | Reports current LED state | `led=1` or `led=0` |
 | `relay=on` / `relay=off` | Turns the relay on/off | `relay=1` / `relay=0` |
 | `relay=status` | Reports current relay state | `relay=1` or `relay=0` |
-| `router_ssid=<name>` | Sets and saves the WiFi SSID to flash | `ok=router_ssid` |
-| `router_password=<pass>` | Sets and saves the WiFi password to flash | `ok=router_password` |
-| `wifi=on` | Connects to the saved SSID/password (blocks up to ~10s) | `wifi=1` on success + `ip=<addr>`, or `wifi=0` on failure |
-| `wifi=off` | Disconnects and stops auto-reconnecting on future boots | `wifi=0` |
+| `router_ssid=<name>` | Sets and saves the WiFi SSID to flash (percent-encoded, see above) | `ok=router_ssid` |
+| `router_password=<pass>` | Sets and saves the WiFi password to flash (percent-encoded) | `ok=router_password` |
+| `wifi=on` | Starts connecting to the saved SSID/password — **non-blocking**, returns immediately | `wifi=connecting` right away, then `wifi=1` + `ip=<addr>` on success or `wifi=0` on failure/timeout (up to ~10s later) |
+| `wifi=off` | Disconnects, cancels any in-progress connect attempt, and stops auto-reconnecting on future boots | `wifi=0` |
 | `wifi=status` | Reports current WiFi connection state | `wifi=1`/`wifi=0`, plus `ip=<addr>` if connected |
-| `wifi=scan` | Scans for nearby networks | One `wifi_scan=<ssid>` per network found, then `wifi_scan_done=<count>` |
-| `stream=on` | Starts the camera and HTTP video server | `stream_url=http://<ip>:81/stream` and `jpg_url=http://<ip>/jpg` |
+| `wifi=scan` | Scans for nearby networks — **non-blocking** | One `wifi_scan=<ssid>` per network found, then `wifi_scan_done=<count>`, once the scan (which itself takes a few seconds) completes. `err=wifi_scan_busy` if one is already running. |
+| `auth=status` | Reveals the current HTTP auth token — **BLE/Serial only** | `auth=<32-char hex token>` |
+| `auth=new` | Rotates the HTTP auth token (invalidates the old one) — **BLE/Serial only** | `auth=<new token>` |
+| `stream=on` | Starts the camera and HTTP video server | `stream_url=http://<ip>:81/stream?t=<token>` and `jpg_url=http://<ip>/jpg?t=<token>` |
 | `stream=off` | Stops streaming (server keeps running, just stops serving frames) | `stream=0` |
 | `stream=status` | Reports current streaming state | `stream=1`/`stream=0`; if already streaming, also resends the URLs above |
 
 Errors are reported as `err=<reason>` (`err=no_ssid`, `err=wifi_off`,
-`err=camera_init`, `err=wifi_scan_failed`, `err=no_command`).
+`err=camera_init`, `err=wifi_scan_failed`, `err=wifi_scan_busy`,
+`err=no_command`, `err=unauthorized`, `err=forbidden_over_http`).
 
 ### WiFi persistence
 
@@ -127,6 +138,17 @@ received. A separate persisted flag tracks *intent*: `wifi=on` sets it,
 a saved SSID **and** that intent flag are present — so an explicit
 disconnect sticks across power cycles, instead of the board silently
 reconnecting on its own every time it boots.
+
+### Non-blocking WiFi connect/scan
+
+`wifi=on` and `wifi=scan` return immediately rather than blocking the
+caller for the duration of the operation (up to ~10s for a connect, a few
+seconds for a scan). `pollWifiConnect()`/`pollWifiScan()`, called every
+`loop()` iteration, track progress in the background and send the real
+result as a follow-up notification once it resolves. This keeps BLE
+writes, Serial input, and other HTTP requests responsive the whole time —
+previously, a `stream=off` sent while a `wifi=on` was still connecting
+(or a scan was running) would have to wait for it to finish first.
 
 ### HTTP endpoints and why streaming has its own port
 
@@ -144,6 +166,10 @@ video stream. The two server tasks are also pinned to different CPU cores
 with different priorities so control commands stay responsive under
 streaming load. (This mirrors the structure of Espressif's own
 `CameraWebServer` example.)
+
+Every request to any of these three endpoints (`/cmd`, `/jpg`, `/stream`)
+must include `?t=<auth token>` (or `&t=...` alongside other query
+parameters) or it gets `401 Unauthorized` — see "Security" below.
 
 ### Debug logging
 
@@ -173,10 +199,11 @@ A dark-themed Tkinter app that:
 
 - Connects to the board over BLE (scan by name, auto-subscribes to
   notifications).
-- Toggles LED and relay — sent over HTTP once the board's WiFi IP is known
-  (learned from BLE, cached locally in `tools/mailbox_gui_config.json` so
-  it's available immediately on the next launch too), falling back to BLE
-  automatically if the IP isn't known yet.
+- Toggles LED and relay — sent over HTTP once the board's WiFi IP *and*
+  HTTP auth token are known (both learned from BLE, cached locally in
+  `tools/mailbox_gui_config.json` so they're available immediately on the
+  next launch too), falling back to BLE automatically if either isn't
+  known yet.
 - Scans for WiFi networks and lets you pick one, enter a password, and
   connect — this part always goes over BLE, since the board isn't
   reachable over WiFi until it has joined a network.
@@ -202,16 +229,35 @@ the full GUI.
 
 This is a hobby project, not a hardened product:
 
-- **No BLE pairing/bonding/encryption** — anyone in range who knows the
-  service/characteristic UUIDs (visible in this repo) can connect and issue
-  commands.
-- **No authentication on the HTTP endpoints** — anyone on the same WiFi
-  network can hit `/cmd`, `/jpg`, or `/stream` directly.
+- **HTTP endpoints require a per-device auth token.** A 32-character hex
+  token is generated on first boot (hardware RNG, `esp_random()`) and
+  persisted to flash. Every request to `/cmd`, `/jpg`, or `/stream` must
+  include it (`?t=...`); a missing or wrong token gets
+  `401 Unauthorized` with no further processing. The token itself is
+  obtainable **only** via `auth=status`/`auth=new` over BLE or Serial —
+  an HTTP request for it (`captureForHttp` is set) is refused with
+  `err=forbidden_over_http`. So merely being on the same WiFi network is
+  no longer enough to drive the relay or view the camera; an attacker
+  still needs BLE (or physical USB Serial) access first to obtain the
+  token.
+- **No BLE pairing/bonding/encryption**, however — anyone in range who
+  knows the service/characteristic UUIDs (visible in this repo) can
+  connect and issue commands, including `auth=status` to read the HTTP
+  token above. This is the main remaining gap: the HTTP layer is now
+  locked behind a secret, but that secret — and full control via BLE
+  itself — is still available to anyone who can get a BLE connection to
+  the board. Fixing this properly means adding BLE link encryption
+  (pairing/bonding), which hasn't been done here because it's high-risk
+  to get right without hardware-in-the-loop testing (a bad pairing
+  configuration can leave a board that no longer accepts *any* BLE
+  connection until physically reflashed).
 - **WiFi credentials are stored in plaintext** in both BLE transit and
-  on-flash storage.
-- Neither port is exposed to the internet unless you explicitly configure
-  port forwarding on your router.
+  on-flash storage (as is the auth token itself, in both the board's
+  flash and the GUI's local `mailbox_gui_config.json` cache).
+- Neither HTTP port is exposed to the internet unless you explicitly
+  configure port forwarding on your router.
 
-Don't rely on this for anything where unauthorized access to the relay
-(mailbox lock) or camera feed would be a real problem, without adding
-proper authentication first.
+Don't rely on this for anything where unauthorized *physical/BLE-range*
+access to the relay (mailbox lock) or camera feed would be a real
+problem, without adding BLE encryption first. The HTTP surface alone,
+however, is no longer usable by someone who's merely joined your WiFi.

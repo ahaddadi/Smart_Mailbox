@@ -47,6 +47,11 @@ endpoint and reusing _handle_notify() for the replies (see
 _http_command_worker() below, which feeds the HTTP response back through
 the exact same code path a BLE notification would take).
 
+Every HTTP request also needs the board's per-device auth token (see the
+firmware's "Security" doc comment): this GUI requests it once via
+"auth=status" right after connecting (in _refresh_status()) and caches it
+alongside board_ip, so _http_command() has both before it ever tries HTTP.
+
 Install:  pip install -r requirements.txt
 Run:      python mailbox_gui.py
 """
@@ -58,6 +63,7 @@ import queue
 import re
 import threading
 import tkinter as tk
+import urllib.parse
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Optional
@@ -74,10 +80,13 @@ from PIL import Image, ImageTk
 DEVICE_NAME = "Smart_Mailbox"
 MESSAGE_UUID = "4ac8a682-9736-4e5d-932b-e9b31405049c"
 
-# Small local cache of the board's last known WiFi IP, so the GUI doesn't
-# have to reconnect over BLE just to rediscover it on every launch. Stored
-# next to this script rather than anywhere shared, since it's only ever a
-# convenience hint - see _load_config/_save_config and board_ip below.
+# Small local cache of the board's last known WiFi IP and HTTP auth token,
+# so the GUI doesn't have to reconnect over BLE just to rediscover them on
+# every launch. Stored next to this script rather than anywhere shared,
+# since it's only ever a convenience hint - see _load_config/_update_config
+# and board_ip/auth_token below. Contains the auth token in plaintext, same
+# as the firmware's own flash storage - not meant to resist someone with
+# access to this machine's filesystem.
 CONFIG_PATH = Path(__file__).resolve().parent / "mailbox_gui_config.json"
 
 
@@ -92,7 +101,17 @@ def _save_config(data: dict):
     try:
         CONFIG_PATH.write_text(json.dumps(data))
     except Exception:
-        pass  # best-effort only - losing the cached IP just means one extra BLE round-trip next launch
+        pass  # best-effort only - losing the cached IP/token just means one extra BLE round-trip next launch
+
+
+def _update_config(key: str, value):
+    # Merges into the existing file rather than overwriting it, since
+    # board_ip and auth_token are each saved independently as they arrive
+    # (at different times) - a plain _save_config({key: value}) here would
+    # wipe out whichever of the two was cached first.
+    data = _load_config()
+    data[key] = value
+    _save_config(data)
 
 
 # Three-tier elevation, like iOS/macOS dark mode: window is darkest,
@@ -283,15 +302,18 @@ class MailboxApp(tk.Tk):
         self.ble = BLEWorker(self.event_q)
         self.stream_reader: Optional[MJPEGReader] = None
 
-        # The board's WiFi IP address, used by _http_command() to send
-        # LED/relay/stream control over WiFi instead of BLE once known.
-        # Pre-seeded from CONFIG_PATH (the last IP we saw last session) so
-        # HTTP control can work immediately without needing a fresh BLE
-        # connection first - if that cached address is stale (board got a
-        # new DHCP lease, etc.) the HTTP request just fails and logs an
-        # error; a fresh "ip=..." BLE notification (see _handle_notify)
-        # always overwrites it with the current one and re-saves it.
-        self.board_ip: Optional[str] = _load_config().get("board_ip")
+        # The board's WiFi IP and HTTP auth token, used together by
+        # _http_command() to send LED/relay/stream control over WiFi
+        # instead of BLE once both are known. Pre-seeded from CONFIG_PATH
+        # (the values we last saw) so HTTP control can work immediately
+        # without needing a fresh BLE connection first - if the cached IP
+        # is stale (board got a new DHCP lease, etc.) the HTTP request just
+        # fails and logs an error; fresh "ip=..."/"auth=..." BLE
+        # notifications (see _handle_notify) always overwrite these and
+        # re-save them.
+        _cfg = _load_config()
+        self.board_ip: Optional[str] = _cfg.get("board_ip")
+        self.auth_token: Optional[str] = _cfg.get("auth_token")
 
         # Video recording state (see _toggle_recording/_write_video_frame).
         self.recording = False
@@ -300,7 +322,7 @@ class MailboxApp(tk.Tk):
 
         self._apply_dark_theme()
         self._build_ui()
-        if self.board_ip:
+        if self.board_ip and self.auth_token:
             self._log(f"[GUI] Using last known board IP: {self.board_ip} (unconfirmed)")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # Drives both BLEWorker and MJPEGReader results into the UI: runs
@@ -438,21 +460,29 @@ class MailboxApp(tk.Tk):
         # the firmware's expectation that router_ssid/router_password are
         # saved to flash immediately and wifi=on then uses whatever the
         # current saved values are (see processCommand() in the firmware).
+        # Both are percent-encoded (quote(..., safe="")) since the
+        # firmware's command parser treats a raw space/';'/'=' as a
+        # delimiter - this is what lets a network name like "My House
+        # WiFi" or a password containing ';' survive intact; the firmware
+        # reverses it with urlDecode() before saving either value.
         ssid = self.ssid_entry.get().strip()
         password = self.pass_entry.get()
         if not ssid:
             self._log("[GUI] Enter an SSID first")
             return
-        self.ble.send(f"router_ssid={ssid};router_password={password};wifi=on")
+        ssid_enc = urllib.parse.quote(ssid, safe="")
+        password_enc = urllib.parse.quote(password, safe="")
+        self.ble.send(f"router_ssid={ssid_enc};router_password={password_enc};wifi=on")
 
     def _wifi_disconnect(self):
         self.ble.send("wifi=off")
 
     def _refresh_status(self):
-        # One combined command requesting every status flag at once; the
-        # board replies with one notification per key, each handled in
-        # _handle_notify.
-        self.ble.send("led=status;relay=status;wifi=status;stream=status")
+        # One combined command requesting every status flag at once, plus
+        # the HTTP auth token (needed before _http_command() can use HTTP
+        # at all - see checkHttpAuth() in the firmware). The board replies
+        # with one notification per key, each handled in _handle_notify.
+        self.ble.send("led=status;relay=status;wifi=status;stream=status;auth=status")
 
     def _wifi_scan(self):
         # Clears the previous scan's results immediately (rather than
@@ -480,11 +510,13 @@ class MailboxApp(tk.Tk):
 
     def _http_command(self, cmd: str):
         """Send `cmd` (e.g. "led=on") to the board's HTTP /cmd endpoint
-        instead of over BLE - requires board_ip to already be known (see
-        __init__/_handle_notify). Falls back to BLE if it isn't, so these
-        buttons still work before the board's WiFi IP has been learned."""
-        if not self.board_ip:
-            self._log(f"[GUI] Board IP not known yet - sending \"{cmd}\" over BLE instead")
+        instead of over BLE - requires both board_ip and auth_token to
+        already be known (see __init__/_handle_notify; the firmware
+        rejects any HTTP request missing a valid token). Falls back to
+        BLE if either isn't known yet, so these buttons still work before
+        the board's WiFi IP/token have been learned."""
+        if not self.board_ip or not self.auth_token:
+            self._log(f"[GUI] Board IP or auth token not known yet - sending \"{cmd}\" over BLE instead")
             self.ble.send(cmd)
             return
         threading.Thread(target=self._http_command_worker, args=(cmd,), daemon=True).start()
@@ -497,7 +529,7 @@ class MailboxApp(tk.Tk):
         # which transport the reply actually came over.
         url = f"http://{self.board_ip}/cmd"
         try:
-            resp = requests.get(url, params={"c": cmd}, timeout=5)
+            resp = requests.get(url, params={"c": cmd, "t": self.auth_token}, timeout=5)
             for line in resp.text.splitlines():
                 line = line.strip()
                 if line:
@@ -589,6 +621,11 @@ class MailboxApp(tk.Tk):
             self.led_var.set("LED: " + ("On" if text.endswith("1") else "Off"))
         elif text.startswith("relay="):
             self.relay_var.set("Relay: " + ("On" if text.endswith("1") else "Off"))
+        elif text == "wifi=connecting":
+            # Intermediate ack for wifi=on - must be checked before the
+            # generic "wifi=" case below, since the real "wifi=1"/"wifi=0"
+            # follows later once pollWifiConnect() (firmware) resolves it.
+            self.wifi_var.set("WiFi: Connecting...")
         elif text.startswith("wifi="):
             self.wifi_var.set("WiFi: " + ("Connected" if text.endswith("1") else "Disconnected"))
         elif text.startswith("ip="):
@@ -596,7 +633,13 @@ class MailboxApp(tk.Tk):
             # stream commands switch to HTTP (see _http_command). Cached
             # to disk so it's available immediately on the next launch too.
             self.board_ip = text.split("=", 1)[1]
-            _save_config({"board_ip": self.board_ip})
+            _update_config("board_ip", self.board_ip)
+        elif text.startswith("auth="):
+            # The HTTP auth token, needed alongside board_ip before
+            # _http_command() will use HTTP at all - see checkHttpAuth()
+            # in the firmware.
+            self.auth_token = text.split("=", 1)[1]
+            _update_config("auth_token", self.auth_token)
         elif text.startswith("stream_url="):
             # Arrives either right after "stream=on", or as part of a
             # stream=status reply if the board was already streaming -
@@ -612,6 +655,7 @@ class MailboxApp(tk.Tk):
         "led=0": "LED turned OFF",
         "relay=1": "Relay turned ON",
         "relay=0": "Relay turned OFF",
+        "wifi=connecting": "Connecting to WiFi...",
         "wifi=1": "WiFi connected",
         "wifi=0": "WiFi disconnected",
         "stream=1": "Streaming started",
@@ -622,6 +666,10 @@ class MailboxApp(tk.Tk):
         "err=camera_init": "Error: camera failed to initialize",
         "err=no_ssid": "Error: no SSID set",
         "err=wifi_scan_failed": "Error: WiFi scan failed",
+        "err=wifi_scan_busy": "Error: a WiFi scan is already in progress",
+        "err=unauthorized": "Error: HTTP request rejected (bad/missing auth token)",
+        "err=forbidden_over_http": "Error: the auth token can only be requested over BLE/Serial",
+        "err=no_command": "Error: empty HTTP command",
     }
 
     def _readable_notify(self, text: str) -> str:
@@ -634,6 +682,8 @@ class MailboxApp(tk.Tk):
             return self.NOTIFY_TEXT[text]
         if text.startswith("ip="):
             return "Board WiFi IP: " + text.split("=", 1)[1]
+        if text.startswith("auth="):
+            return "Auth token: " + text.split("=", 1)[1]
         if text.startswith("stream_url="):
             return "Stream URL: " + text.split("=", 1)[1]
         if text.startswith("jpg_url="):
@@ -655,7 +705,7 @@ class MailboxApp(tk.Tk):
     def _tag_for(self, raw_text: str) -> Optional[str]:
         if raw_text.startswith("err="):
             return "error"
-        if raw_text in self.OK_NOTIFIES or raw_text.startswith("wifi_scan="):
+        if raw_text in self.OK_NOTIFIES or raw_text.startswith("wifi_scan=") or raw_text.startswith("auth="):
             return "ok"
         return None
 

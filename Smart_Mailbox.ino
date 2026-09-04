@@ -19,21 +19,52 @@
 //      happen here.
 //   2. Serial (USB): type a command into the Serial Monitor and press
 //      Enter. Useful for testing without a phone/BLE client.
-//   3. HTTP, once WiFi is up: GET /cmd?c=<url-encoded command> runs the
-//      same command and replies with the same text a BLE notify would
-//      have carried (see cmd_handler()). A client learns the board's IP
-//      from the "ip=..." BLE notification sent on a successful wifi=on
-//      or wifi=status, and can then drive led=/relay=/stream=/etc.
-//      entirely over WiFi without staying connected over BLE.
+//   3. HTTP, once WiFi is up: GET /cmd?c=<url-encoded command>&t=<auth
+//      token> runs the same command and replies with the same text a BLE
+//      notify would have carried (see cmd_handler()). A client learns the
+//      board's IP from the "ip=..." BLE notification sent on a successful
+//      wifi=on or wifi=status, and can then drive led=/relay=/stream=/etc.
+//      entirely over WiFi without staying connected over BLE. Every HTTP
+//      endpoint (/cmd, /jpg, /stream) requires that token - see "Security"
+//      below.
 //
-// Supported keys: led, relay, router_ssid, router_password, wifi, stream.
-// See processCommand() for the full set of accepted values per key and the
-// notifications each one produces.
+// Values containing '=', ';', or a space (most importantly WiFi SSIDs and
+// passwords) must be percent-encoded by the sender - see urlDecode() and
+// its use on router_ssid/router_password in processCommand(). The command
+// parser itself treats a raw '=', ';', or ' ' as structural, so an
+// unencoded one inside a value would be misread as a delimiter.
+//
+// Supported keys: led, relay, router_ssid, router_password, wifi, stream,
+// auth. See processCommand() for the full set of accepted values per key
+// and the notifications each one produces.
 //
 // WiFi credentials (router_ssid/router_password) and the "should we be
 // connected" intent are persisted to flash (NVS, via the Preferences
 // library) so the board can reconnect automatically after a reboot or power
 // loss - see the wifiWanted flag and its use in setup()/processCommand().
+//
+// Security
+// --------
+// BLE has no pairing/bonding/encryption configured - anyone in range who
+// knows the service/characteristic UUIDs (published in this repo) can
+// connect and issue commands. That's a real, currently-unaddressed gap;
+// what IS addressed is the HTTP surface: every HTTP request must include
+// a per-device secret token (?t=...) that is generated on first boot and
+// obtainable ONLY over BLE/Serial (see "auth=status"/"auth=new" in
+// processCommand() and checkHttpAuth()), never over HTTP itself. So
+// merely being on the same WiFi network is no longer enough to drive the
+// relay or view the camera - an attacker still needs BLE proximity first.
+//
+// Robustness
+// ----------
+// wifi=on and wifi=scan are both non-blocking: they kick off the
+// operation and return immediately (reporting "wifi=connecting" for
+// wifi=on), with the real result following later via a BLE/Serial
+// notification once pollWifiConnect()/pollWifiScan() (called every
+// loop() iteration) see it complete. This keeps the BLE callback, Serial
+// input, and other HTTP requests responsive instead of being blocked for
+// the up-to-10-second WiFi connect timeout or the several seconds a scan
+// can take.
 // ============================================================================
 
 #include "BLEDevice.h"
@@ -47,6 +78,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_random.h"
 
 // ===================
 // Select camera model
@@ -106,12 +138,30 @@ String rxload = "";
 // reprovisioned over BLE every time.
 String Router_SSID = "";
 String Router_Password = "";
-bool wifiConnected = false;      // true once connectWiFi() has actually succeeded
+bool wifiConnected = false;      // true once a connect attempt has actually succeeded
 bool wifiWanted = false;         // persisted: should we auto-connect on boot?
 
-Preferences wifiPrefs;  // NVS namespace "wifi": stores ssid, pass, and the wanted flag
+Preferences wifiPrefs;  // NVS namespace "wifi": stores ssid, pass, wanted flag, and the auth token
 
-bool ledState = false;  // used only to alternate the LED while connectWiFi() is blocking/retrying
+// Per-device secret required for every HTTP request (see checkHttpAuth()).
+// Generated once on first boot and persisted; only ever revealed over
+// BLE/Serial ("auth=status"/"auth=new" in processCommand()), never HTTP.
+String authToken = "";
+
+// Non-blocking WiFi connect: startConnectWiFi() kicks off WiFi.begin() and
+// returns immediately; pollWifiConnect() (called every loop() iteration)
+// checks progress and sends the eventual wifi=1/wifi=0 (+ip=) reply once
+// it resolves, without blocking whichever command triggered it.
+bool wifiConnectPending = false;
+uint32_t wifiConnectStartMs = 0;
+uint32_t wifiConnectLastBlinkMs = 0;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 10000;
+
+// Non-blocking WiFi scan: same idea, using WiFi.scanNetworks(true) (async
+// mode) and polling WiFi.scanComplete() from pollWifiScan().
+bool wifiScanPending = false;
+
+bool ledState = false;  // used only to alternate the LED while pollWifiConnect() is retrying
 bool ledOn = false;      // last commanded LED state (led=on/off), used for led=status and the debug log
 bool relayOn = false;    // last commanded relay state (relay=on/off), used for relay=status and the debug log
 
@@ -247,6 +297,20 @@ String urlDecode(const String &s) {
     }
   }
   return out;
+}
+
+// Generates a fresh 32-character hex auth token using the hardware RNG
+// (esp_random(), true entropy on ESP32/ESP32-S3, not a seeded PRNG) - see
+// authToken above. Called once on first boot, and again on "auth=new" to
+// rotate it (invalidating any previously-shared token).
+String generateAuthToken() {
+  static const char *hexChars = "0123456789abcdef";
+  String token;
+  token.reserve(32);
+  for (int i = 0; i < 32; i++) {
+    token += hexChars[esp_random() % 16];
+  }
+  return token;
 }
 
 // ============================
@@ -428,6 +492,28 @@ bool initCameraOnce() {
 // ============================
 // HTTP Handlers
 // ============================
+// Checks the "t" query parameter of an HTTP request against authToken.
+// Applied to every HTTP endpoint (cmd_handler, jpg_handler, stream_handler)
+// as the first thing they do, before touching WiFi/camera/relay state at
+// all - without this, anyone on the same WiFi network (no BLE proximity
+// needed) could drive the relay or watch the camera with zero credentials.
+bool checkHttpAuth(httpd_req_t *req) {
+  if (authToken.length() == 0) return false;  // fail closed if somehow not yet generated
+  size_t qlen = httpd_req_get_url_query_len(req);
+  if (qlen == 0 || qlen >= 300) return false;
+  char query[300];
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) return false;
+  char value[40];
+  if (httpd_query_key_value(query, "t", value, sizeof(value)) != ESP_OK) return false;
+  return authToken == value;
+}
+
+void sendHttpUnauthorized(httpd_req_t *req) {
+  httpd_resp_set_status(req, "401 Unauthorized");
+  httpd_resp_set_type(req, "text/plain");
+  httpd_resp_send(req, "err=unauthorized", HTTPD_RESP_USE_STRLEN);
+}
+
 // GET /cmd?c=<url-encoded command> - runs any command processCommand()
 // understands (led=on, relay=off, stream=on, wifi=status, etc.) over
 // plain WiFi instead of BLE/Serial, and replies with exactly the same
@@ -436,6 +522,11 @@ bool initCameraOnce() {
 // the board's IP from an earlier "ip=" BLE notification) control the
 // board without needing to stay connected over BLE.
 static esp_err_t cmd_handler(httpd_req_t *req) {
+  if (!checkHttpAuth(req)) {
+    sendHttpUnauthorized(req);
+    return ESP_OK;
+  }
+
   String cmd = "";
   size_t qlen = httpd_req_get_url_query_len(req);
   if (qlen > 0 && qlen < 256) {
@@ -477,6 +568,11 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
 // (streamEnabled); the camera itself is (re)initialized on demand here if
 // it isn't ready yet.
 static esp_err_t jpg_handler(httpd_req_t *req) {
+  if (!checkHttpAuth(req)) {
+    sendHttpUnauthorized(req);
+    return ESP_OK;
+  }
+
   if (!wifiConnected || !streamEnabled) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_send(req, "stream_off", HTTPD_RESP_USE_STRLEN);
@@ -509,6 +605,11 @@ static esp_err_t jpg_handler(httpd_req_t *req) {
 // is what a browser (or the Python GUI's MJPEGReader) opens directly to
 // display live video.
 static esp_err_t stream_handler(httpd_req_t *req) {
+  if (!checkHttpAuth(req)) {
+    sendHttpUnauthorized(req);
+    return ESP_OK;
+  }
+
   if (!wifiConnected || !streamEnabled) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_send(req, "stream_off", HTTPD_RESP_USE_STRLEN);
@@ -568,7 +669,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 
 // Starts two ESP-IDF HTTP server instances and registers the handlers
 // above. Only runs once (streamServerStarted guards repeat calls) -
-// called as soon as WiFi connects (see connectWiFi()), not only when
+// called as soon as WiFi connects (see pollWifiConnect()), not only when
 // streaming starts, since /cmd needs to be reachable over WiFi even if
 // the camera stream itself is never turned on. Both servers stay up for
 // the rest of the board's uptime once started, even if streaming is
@@ -632,12 +733,15 @@ void startCameraServer() {
 }
 
 // ============================
-// WiFi connect helper
+// WiFi connect helper (non-blocking)
 // ============================
-// Attempts to join `ssid`/`pass` in station mode, blocking (with the LED
-// blinking) for up to ~10 seconds before giving up. Used both for the
-// wifi=on command and for the auto-connect attempt at boot.
-bool connectWiFi(const String &ssid, const String &pass) {
+// Kicks off joining `ssid`/`pass` in station mode and returns immediately -
+// does NOT wait for the result. pollWifiConnect(), called every loop()
+// iteration, tracks progress (blinking the LED) and reports the outcome
+// once WiFi.status() resolves or WIFI_CONNECT_TIMEOUT_MS elapses. Used
+// both for the wifi=on command and for the auto-connect attempt at boot,
+// neither of which should block the caller for up to 10 seconds.
+void startConnectWiFi(const String &ssid, const String &pass) {
   wifiConnected = false;
 
   WiFi.setAutoReconnect(false);  // we manage (re)connect attempts ourselves via the wifi= command
@@ -647,39 +751,80 @@ bool connectWiFi(const String &ssid, const String &pass) {
   if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
 
   WiFi.disconnect(true, true);  // clear any previous connection/config before starting a fresh attempt
-  delay(150);
 
   Serial.print("[WIFI] begin: ");
   Serial.println(ssid);
 
   WiFi.begin(ssid.c_str(), pass.c_str());
 
-  // Poll for up to 20 * 500ms = 10s, blinking the LED while we wait.
-  for (int i = 0; i < 20; i++) {
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiConnected = true;
-      Serial.print("[WIFI] connected, IP=");
-      Serial.println(WiFi.localIP());
-      digitalWrite(LED_BUILTIN, HIGH);  // solid LED = connected
-      // Bring up the HTTP server (/jpg, /stream, /cmd) as soon as we have
-      // an IP, not only when streaming is first requested - /cmd needs to
-      // be reachable over WiFi for led=/relay=/stream= control even if
-      // the camera stream itself is never turned on.
-      if (!streamServerStarted) startCameraServer();
-      return true;
-    } else {
-      ledState = !ledState;
-      digitalWrite(LED_BUILTIN, ledState ? HIGH : LOW);
-      delay(500);
-      Serial.println("[WIFI] connecting...");
-    }
+  wifiConnectPending = true;
+  wifiConnectStartMs = millis();
+  wifiConnectLastBlinkMs = 0;
+}
+
+// Call once per loop() iteration. No-op unless a startConnectWiFi() is
+// currently in progress.
+void pollWifiConnect() {
+  if (!wifiConnectPending) return;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnectPending = false;
+    wifiConnected = true;
+    Serial.print("[WIFI] connected, IP=");
+    Serial.println(WiFi.localIP());
+    digitalWrite(LED_BUILTIN, HIGH);  // solid LED = connected
+    // Bring up the HTTP server (/jpg, /stream, /cmd) as soon as we have
+    // an IP, not only when streaming is first requested - /cmd needs to
+    // be reachable over WiFi for led=/relay=/stream= control even if
+    // the camera stream itself is never turned on.
+    if (!streamServerStarted) startCameraServer();
+    bleNotifyAndPrint("wifi=1");
+    // Report our IP so a client can start talking to /cmd, /jpg, and
+    // /stream directly over WiFi instead of needing to stay on BLE.
+    bleNotifyAndPrint("ip=" + WiFi.localIP().toString());
+    return;
   }
 
-  Serial.println("[WIFI] connect timeout");
-  WiFi.disconnect(true, false);
-  digitalWrite(LED_BUILTIN, LOW);
-  wifiConnected = false;
-  return false;
+  uint32_t now = millis();
+  if (now - wifiConnectStartMs >= WIFI_CONNECT_TIMEOUT_MS) {
+    wifiConnectPending = false;
+    Serial.println("[WIFI] connect timeout");
+    WiFi.disconnect(true, false);
+    digitalWrite(LED_BUILTIN, LOW);
+    wifiConnected = false;
+    bleNotifyAndPrint("wifi=0");
+    return;
+  }
+
+  if (now - wifiConnectLastBlinkMs >= 500) {  // blink roughly twice a second while connecting
+    wifiConnectLastBlinkMs = now;
+    ledState = !ledState;
+    digitalWrite(LED_BUILTIN, ledState ? HIGH : LOW);
+    Serial.println("[WIFI] connecting...");
+  }
+}
+
+// Call once per loop() iteration. No-op unless a wifi=scan (see
+// processCommand()) is currently in progress. Once WiFi.scanComplete()
+// stops returning WIFI_SCAN_RUNNING, reports the results (or failure) and
+// frees them via WiFi.scanDelete().
+void pollWifiScan() {
+  if (!wifiScanPending) return;
+
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;  // still in progress
+
+  wifiScanPending = false;
+  if (n < 0) {
+    bleNotifyAndPrint("err=wifi_scan_failed");
+  } else {
+    for (int i = 0; i < n; i++) {
+      bleNotifyAndPrint("wifi_scan=" + WiFi.SSID(i));
+      delay(20);  // give the BLE notify queue time to drain
+    }
+    bleNotifyAndPrint("wifi_scan_done=" + String(n));
+  }
+  WiFi.scanDelete();  // free the scan result memory
 }
 
 // ============================
@@ -711,8 +856,11 @@ void startStreamingAndReport() {
   if (!streamServerStarted) startCameraServer();
 
   String ip = WiFi.localIP().toString();
-  String url = "stream_url=http://" + ip + ":81/stream";  // dedicated stream server - see startCameraServer()
-  String jpg = "jpg_url=http://" + ip + "/jpg";
+  // ?t=<authToken> - required by checkHttpAuth() on every HTTP endpoint;
+  // embedding it here means the client never has to add it itself for
+  // these two URLs (only for its own /cmd requests - see cmd_handler()).
+  String url = "stream_url=http://" + ip + ":81/stream?t=" + authToken;  // dedicated stream server - see startCameraServer()
+  String jpg = "jpg_url=http://" + ip + "/jpg?t=" + authToken;
 
   Serial.print("[DBG] ");
   Serial.println(url);
@@ -775,13 +923,23 @@ void setup() {
   Router_Password = wifiPrefs.getString("pass", "");
   wifiWanted = wifiPrefs.getBool("wanted", false);
 
+  // Load the HTTP auth token, generating and persisting one on first boot
+  // ever (or after a "auth=new" rotation cleared it - it never does, but
+  // this is also the recovery path if NVS were ever erased).
+  authToken = wifiPrefs.getString("authtok", "");
+  if (authToken.length() == 0) {
+    authToken = generateAuthToken();
+    wifiPrefs.putString("authtok", authToken);
+    Serial.println("[DBG] Generated new HTTP auth token");
+  }
+
   setupBLE("Smart_Mailbox");
   Serial.println("[DBG] Bluetooth is ready!");
 
   if (Router_SSID.length() > 0 && wifiWanted) {
     Serial.print("[DBG] Auto-connecting with saved WiFi: ");
     Serial.println(Router_SSID);
-    connectWiFi(Router_SSID, Router_Password);
+    startConnectWiFi(Router_SSID, Router_Password);  // non-blocking; loop()'s pollWifiConnect() finishes it
   } else if (Router_SSID.length() > 0) {
     Serial.println("[DBG] Saved WiFi found but last state was disconnected - not auto-connecting");
   }
@@ -827,11 +985,34 @@ void processCommand(const String &command) {
       bleNotifyAndPrint(relayOn ? "relay=1" : "relay=0");
     }
 
+    // Auth token: auth=status (reveal it) / auth=new (rotate it).
+    // Deliberately refused when this command arrived via HTTP
+    // (captureForHttp) - the whole point of the token is that it can only
+    // ever be learned by someone with BLE/Serial access, never merely by
+    // being on the same WiFi network (see checkHttpAuth()).
+    String Auth_State = getValue(command, "auth");
+    if (Auth_State == "status" || Auth_State == "new") {
+      if (captureForHttp) {
+        bleNotifyAndPrint("err=forbidden_over_http");
+      } else {
+        if (Auth_State == "new") {
+          authToken = generateAuthToken();
+          wifiPrefs.putString("authtok", authToken);
+        }
+        bleNotifyAndPrint("auth=" + authToken);
+      }
+    }
+
     // WiFi credentials: router_ssid=<name>, router_password=<pass>.
-    // Each is saved to flash immediately on receipt, independent of
-    // whether a "wifi=on" follows in the same command - so partial
-    // provisioning (e.g. sending just a new password) still persists.
-    String s = getValue(command, "router_ssid");
+    // Values are urlDecode()'d after extraction, so a sender can
+    // percent-encode a space/';'/'=' inside the SSID or password (which
+    // getValue()'s delimiter-based parser would otherwise misread as a
+    // structural character) - e.g. a network named "My House WiFi" must
+    // be sent as "router_ssid=My%20House%20WiFi". Each is saved to flash
+    // immediately on receipt, independent of whether a "wifi=on" follows
+    // in the same command - so partial provisioning (e.g. sending just a
+    // new password) still persists.
+    String s = urlDecode(getValue(command, "router_ssid"));
     if (s.length()) {
       Router_SSID = s;
       wifiPrefs.putString("ssid", Router_SSID);
@@ -840,7 +1021,7 @@ void processCommand(const String &command) {
       bleNotifyAndPrint("ok=router_ssid");
     }
 
-    String p = getValue(command, "router_password");
+    String p = urlDecode(getValue(command, "router_password"));
     if (p.length()) {
       Router_Password = p;
       wifiPrefs.putString("pass", Router_Password);
@@ -860,16 +1041,20 @@ void processCommand(const String &command) {
         // has to have already worked once).
         wifiWanted = true;
         wifiPrefs.putBool("wanted", true);
-        bool ok = connectWiFi(Router_SSID, Router_Password);
-        bleNotifyAndPrint(ok ? "wifi=1" : "wifi=0");
-        // Report our IP so a client can start talking to /cmd, /jpg, and
-        // /stream directly over WiFi instead of needing to stay on BLE.
-        if (ok) bleNotifyAndPrint("ip=" + WiFi.localIP().toString());
+        // Non-blocking: kicks off the connect attempt and returns right
+        // away. The real "wifi=1"/"wifi=0" (+ "ip=...") reply follows
+        // later, once pollWifiConnect() (called from loop()) sees it
+        // resolve - see startConnectWiFi() for why this can't just wait
+        // here the way it used to.
+        startConnectWiFi(Router_SSID, Router_Password);
+        bleNotifyAndPrint("wifi=connecting");
       }
     } else if (Wifi_State == "off") {
       // Explicit disconnect: clear the "wanted" intent too, so the board
       // stays offline across a reboot until told otherwise (wifi=on or
       // new credentials), instead of silently reconnecting on its own.
+      // Also cancels a still-in-progress connect attempt, if any.
+      wifiConnectPending = false;
       wifiWanted = false;
       wifiPrefs.putBool("wanted", false);
       WiFi.disconnect(true);
@@ -885,23 +1070,19 @@ void processCommand(const String &command) {
       // controlling the board over WiFi instead.
       if (wifiConnected) bleNotifyAndPrint("ip=" + WiFi.localIP().toString());
     } else if (Wifi_State == "scan") {
-      // Scans for nearby networks and reports each one back individually
-      // as it's found (rather than one giant combined message, which
-      // could exceed the BLE notify payload limit), followed by a
-      // wifi_scan_done marker so the client knows the list is complete.
-      Serial.println("[WIFI] scanning...");
-      if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
-      int n = WiFi.scanNetworks();
-      if (n < 0) {
-        bleNotifyAndPrint("err=wifi_scan_failed");
+      // Non-blocking: WiFi.scanNetworks(true) starts an async scan and
+      // returns immediately; pollWifiScan() (called from loop()) reports
+      // each found network - individually, rather than one giant combined
+      // message that could exceed the BLE notify payload limit - once
+      // WiFi.scanComplete() indicates it's done.
+      if (wifiScanPending) {
+        bleNotifyAndPrint("err=wifi_scan_busy");
       } else {
-        for (int i = 0; i < n; i++) {
-          bleNotifyAndPrint("wifi_scan=" + WiFi.SSID(i));
-          delay(20);  // give the BLE notify queue time to drain
-        }
-        bleNotifyAndPrint("wifi_scan_done=" + String(n));
+        Serial.println("[WIFI] scanning...");
+        if (WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_STA);
+        WiFi.scanNetworks(true);
+        wifiScanPending = true;
       }
-      WiFi.scanDelete();  // free the scan result memory
     }
 
     // Stream control: stream=on / stream=off / stream=status
@@ -916,8 +1097,8 @@ void processCommand(const String &command) {
         // re-send the URLs too, so a client that just (re)connected while
         // streaming was already running can resume showing video
         String ip = WiFi.localIP().toString();
-        bleNotifyAndPrint("stream_url=http://" + ip + ":81/stream");
-        bleNotifyAndPrint("jpg_url=http://" + ip + "/jpg");
+        bleNotifyAndPrint("stream_url=http://" + ip + ":81/stream?t=" + authToken);
+        bleNotifyAndPrint("jpg_url=http://" + ip + "/jpg?t=" + authToken);
       }
     }
 }
@@ -935,6 +1116,12 @@ void loop() {
     logState();
   }
 #endif
+
+  // Non-blocking WiFi connect/scan progress checks - both are no-ops
+  // unless one is actually in flight. Run every iteration, ahead of the
+  // 50ms tick gate below, so they resolve promptly.
+  pollWifiConnect();
+  pollWifiScan();
 
   // Serial commands: accumulate a line, dispatch on newline. Handles any
   // Serial Monitor line-ending setting (CR, LF, or CRLF), and also runs
@@ -959,8 +1146,8 @@ void loop() {
   lastTick = now;
 
   // BLE commands: snapshot and clear rxload under the mutex, then dispatch
-  // outside the lock so processCommand()'s (potentially slow, e.g. WiFi
-  // connect/scan) work doesn't hold up the BLE callback task.
+  // outside the lock so the BLE callback task (which only ever touches
+  // rxload itself) isn't held up by processCommand() running here.
   String bleCommand;
   if (deviceConnected) {
     xSemaphoreTake(rxMutex, portMAX_DELAY);
