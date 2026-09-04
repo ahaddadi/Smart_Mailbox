@@ -240,24 +240,25 @@ This is a hobby project, not a hardened product:
   no longer enough to drive the relay or view the camera; an attacker
   still needs BLE (or physical USB Serial) access first to obtain the
   token.
-- **No BLE pairing/bonding/encryption**, however — anyone in range who
-  knows the service/characteristic UUIDs (visible in this repo) can
-  connect and issue commands, including `auth=status` to read the HTTP
-  token above. This is the main remaining gap: the HTTP layer is now
-  locked behind a secret, but that secret — and full control via BLE
-  itself — is still available to anyone who can get a BLE connection to
-  the board. Fixing this properly means adding BLE link encryption
-  (pairing/bonding), which hasn't been done here because it's high-risk
-  to get right without hardware-in-the-loop testing (a bad pairing
-  configuration can leave a board that no longer accepts *any* BLE
-  connection until physically reflashed).
+- **BLE requires pairing.** The command/notify characteristic needs an
+  encrypted, paired link (`PROPERTY_READ_ENC`/`PROPERTY_WRITE_ENC`) —
+  a central has to complete BLE pairing before it can read, write, or be
+  notified on it at all, including reading the HTTP auth token via
+  `auth=status`. Pairing uses "Just Works" (`ESP_IO_CAP_NONE`, no MITM
+  protection) with bonding, so there's no PIN to type and it only
+  happens once per central — but Just Works is still vulnerable to an
+  active man-in-the-middle *during that first pairing*, so it raises the
+  bar (knowing the UUIDs is no longer enough) without being
+  bulletproof. Controlled by `ENABLE_BLE_PAIRING` in the firmware (set
+  to `0` and reflash to fall back to fully open BLE if pairing ever
+  causes connection trouble with a particular central).
 - **WiFi credentials are stored in plaintext** in both BLE transit and
   on-flash storage (as is the auth token itself, in both the board's
   flash and the GUI's local `mailbox_gui_config.json` cache).
 - Neither HTTP port is exposed to the internet unless you explicitly
   configure port forwarding on your router.
 
-Don't rely on this for anything where unauthorized *physical/BLE-range*
-access to the relay (mailbox lock) or camera feed would be a real
-problem, without adding BLE encryption first. The HTTP surface alone,
-however, is no longer usable by someone who's merely joined your WiFi.
+If BLE pairing ever needs to be reset (e.g. after re-flashing the board,
+if the two sides' bond keys get out of sync), forget/remove the
+`Smart_Mailbox` device from your OS's Bluetooth settings and reconnect —
+a fresh pairing will be negotiated automatically.
