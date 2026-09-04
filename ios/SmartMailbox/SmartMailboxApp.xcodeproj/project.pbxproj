@@ -7,29 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		21EA6C338932A19AE48DA630 /* SmartMailboxAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */; };
-		DE247B749E68F94E0419ABA5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */; };
-		15A0AE7A27CDA07E914154BF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB34062D4C48D2AA7F0961A4 /* AppState.swift */; };
-		5F6E7025855F0B1CF26CBBEC /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6AC57FCAF4402A9649843 /* BLEManager.swift */; };
-		8DE9E4082E9632BBA0FCCBB3 /* ProtocolTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */; };
 		0ECF5101CD0C6AE2346116DD /* MJPEGStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */; };
-		FF151290FE1CF5D7AF0E0230 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */; };
+		15A0AE7A27CDA07E914154BF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB34062D4C48D2AA7F0961A4 /* AppState.swift */; };
+		21EA6C338932A19AE48DA630 /* SmartMailboxAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */; };
 		3EFE19E61D2EA2931A576BEB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00860A0418F2800028E1BA37 /* Theme.swift */; };
 		4B215EE5CAC8211B85F172CE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4736E0EBAB7C9F94F193E7F /* Assets.xcassets */; };
+		5F6E7025855F0B1CF26CBBEC /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D6AC57FCAF4402A9649843 /* BLEManager.swift */; };
+		8DE9E4082E9632BBA0FCCBB3 /* ProtocolTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */; };
+		DE247B749E68F94E0419ABA5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */; };
+		FF151290FE1CF5D7AF0E0230 /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartMailboxApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartMailboxAppApp.swift; sourceTree = "<group>"; };
-		DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		CB34062D4C48D2AA7F0961A4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
-		F3D6AC57FCAF4402A9649843 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEManager.swift; sourceTree = "<group>"; };
-		CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTranslator.swift; sourceTree = "<group>"; };
-		ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MJPEGStream.swift; sourceTree = "<group>"; };
-		EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>"; };
 		00860A0418F2800028E1BA37 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		C5BF6A3778EBE602195A2848 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		8B6F2026A62F962B650AEA66 /* SmartMailboxAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartMailboxAppApp.swift; sourceTree = "<group>"; };
 		B4736E0EBAB7C9F94F193E7F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartMailboxApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C5BF6A3778EBE602195A2848 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		CB34062D4C48D2AA7F0961A4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		CFFDEC299FB4FE907CCBA781 /* ProtocolTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTranslator.swift; sourceTree = "<group>"; };
+		DEBB2CE0E3E9BE15BE92B8CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		EB220FAB1D42835DCF79D06D /* VideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoRecorder.swift; sourceTree = "<group>"; };
+		ED63B65029B26FF33D12A6C3 /* MJPEGStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MJPEGStream.swift; sourceTree = "<group>"; };
+		F3D6AC57FCAF4402A9649843 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -43,20 +43,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		88B878E16C06BC1810B33505 = {
-			isa = PBXGroup;
-			children = (
-				A1AECAE1B251F899B4D06AA8 /* SmartMailboxApp */,
-				03A4B53E76BEE5998BFC1B0D /* Products */,
-			);
-			sourceTree = "<group>";
-		};
 		03A4B53E76BEE5998BFC1B0D /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				C0262B2713EF52F959C66D6F /* SmartMailboxApp.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		88B878E16C06BC1810B33505 = {
+			isa = PBXGroup;
+			children = (
+				A1AECAE1B251F899B4D06AA8 /* SmartMailboxApp */,
+				03A4B53E76BEE5998BFC1B0D /* Products */,
+			);
 			sourceTree = "<group>";
 		};
 		A1AECAE1B251F899B4D06AA8 /* SmartMailboxApp */ = {
@@ -220,6 +220,30 @@
 			};
 			name = Debug;
 		};
+		4B08DF9A72FB71BC41391AA9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartMailboxApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.SmartMailboxApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		769E72A22D87D0C2BF9DB8F6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -284,7 +308,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SmartMailboxApp/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = "$(RECOMMENDED_IPHONEOS_DEPLOYMENT_TARGET)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -297,30 +321,6 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
-		};
-		4B08DF9A72FB71BC41391AA9 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = SmartMailboxApp/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.SmartMailboxApp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
 		};
 /* End XCBuildConfiguration section */
 

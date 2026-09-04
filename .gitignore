@@ -14,3 +14,7 @@ DerivedData/
 .build/
 *.xcscmblueprint
 *.xccheckout
+
+# macOS AppleDouble files (created when Finder copies onto non-HFS+ storage, e.g. OneDrive)
+._*
+.DS_Store
